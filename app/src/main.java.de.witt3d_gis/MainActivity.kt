@@ -90,7 +90,7 @@ class MainActivity : AppCompatActivity() {
                                     "Offline map downloaded successfully",
                                     Toast.LENGTH_SHORT
                                 ).show()
-                            } else if (status.downloadState == OfflineRegion.STATE_ACTIVE) {
+                            } else if (status.isDownloading) {
                                 progressDialog.setMessage("Downloading: $percentage%")
                             }
                         }
