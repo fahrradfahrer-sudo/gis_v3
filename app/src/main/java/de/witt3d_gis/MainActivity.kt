@@ -79,6 +79,14 @@ class MainActivity : AppCompatActivity() {
 
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
+
+        if (apiKey == "YOUR_MAPTILER_API_KEY") {
+            Toast.makeText(
+                this,
+                "Please replace 'YOUR_MAPTILER_API_KEY' with your own API key.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun downloadRegion() {
