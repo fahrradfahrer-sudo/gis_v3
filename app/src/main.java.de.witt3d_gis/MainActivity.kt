@@ -1,13 +1,9 @@
 package de.witt3d_gis
 
+import android.app.ProgressDialog
 import android.os.Bundle
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Button
-import android.widget.ProgressBar
-import android.widget.Spinner
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import org.maplibre.android.MapLibre
 import org.maplibre.android.maps.MapView
@@ -24,17 +20,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var map: MapLibreMap
     private lateinit var offlineManager: OfflineManager
     private var offlineRegion: OfflineRegion? = null
-    private var isDownloading = false
-    private lateinit var progressBar: ProgressBar
-
-    // Replace with your own MapTiler API key
-    private val apiKey = "YOUR_MAPTILER_API_KEY"
-
-    private val mapStyles = listOf(
-        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
-        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
-        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
-    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,53 +30,21 @@ class MainActivity : AppCompatActivity() {
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { map ->
             this.map = map
-            map.setStyle(mapStyles[0].second)
+            map.setStyle(Style.Builder().fromUri("https://demotiles.maplibre.org/style.json"))
         }
 
         offlineManager = OfflineManager.getInstance(this)
 
         val downloadButton = findViewById<Button>(R.id.downloadButton)
         downloadButton.setOnClickListener {
-            if (::map.isInitialized && !isDownloading) {
+            if (::map.isInitialized) {
                 downloadRegion()
             }
-        }
-
-        val styleSpinner = findViewById<Spinner>(R.id.styleSpinner)
-        val adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            mapStyles.map { it.first }
-        )
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        styleSpinner.adapter = adapter
-        styleSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(
-                parent: AdapterView<*>?,
-                view: android.view.View?,
-                position: Int,
-                id: Long
-            ) {
-                if (::map.isInitialized) {
-                    map.setStyle(mapStyles[position].second)
-                }
-            }
-
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        if (apiKey == "YOUR_MAPTILER_API_KEY") {
-            Toast.makeText(
-                this,
-                "Please replace 'YOUR_MAPTILER_API_KEY' with your own API key.",
-                Toast.LENGTH_LONG
-            ).show()
         }
     }
 
     private fun downloadRegion() {
-        val styleUrl = map.style?.uri ?: return
-
+        val styleUrl = map.style!!.uri
         val bounds = map.projection.visibleRegion.latLngBounds
         val definition = OfflineTilePyramidRegionDefinition(
             styleUrl,
@@ -109,16 +62,11 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val builder = AlertDialog.Builder(this)
-        builder.setTitle("Downloading Offline Map")
-        val view = layoutInflater.inflate(R.layout.progress_dialog, null)
-        builder.setView(view)
-        progressBar = view.findViewById(R.id.progressBar)
-        builder.setCancelable(false)
-        val dialog = builder.create()
-        dialog.show()
-
-        isDownloading = true
+        val progressDialog = ProgressDialog(this)
+        progressDialog.setTitle("Downloading Offline Map")
+        progressDialog.setMessage("Please wait...")
+        progressDialog.setCancelable(false)
+        progressDialog.show()
 
         offlineManager.createOfflineRegion(
             definition,
@@ -134,21 +82,21 @@ class MainActivity : AppCompatActivity() {
                             } else {
                                 0
                             }
-                            progressBar.progress = percentage
+                            progressDialog.progress = percentage
                             if (status.isComplete) {
-                                dialog.dismiss()
-                                isDownloading = false
+                                progressDialog.dismiss()
                                 Toast.makeText(
                                     this@MainActivity,
                                     "Offline map downloaded successfully",
                                     Toast.LENGTH_SHORT
                                 ).show()
+                            } else if (status.isDownloading) {
+                                progressDialog.setMessage("Downloading: $percentage%")
                             }
                         }
 
                         override fun onError(error: OfflineRegionError) {
-                            dialog.dismiss()
-                            isDownloading = false
+                            progressDialog.dismiss()
                             Toast.makeText(
                                 this@MainActivity,
                                 "Error downloading offline map: ${error.reason}",
@@ -157,8 +105,7 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         override fun mapboxTileCountLimitExceeded(limit: Long) {
-                            dialog.dismiss()
-                            isDownloading = false
+                            progressDialog.dismiss()
                             Toast.makeText(
                                 this@MainActivity,
                                 "Mapbox tile count limit exceeded: $limit",
@@ -169,8 +116,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 override fun onError(error: String) {
-                    dialog.dismiss()
-                    isDownloading = false
+                    progressDialog.dismiss()
                     Toast.makeText(
                         this@MainActivity,
                         "Error creating offline region: $error",

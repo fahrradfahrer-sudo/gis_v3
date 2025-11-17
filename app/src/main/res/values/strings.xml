@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Witt3D_GIS</string>
+    <string name="download_map">Download</string>
 </resources>
