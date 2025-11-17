@@ -1,7 +1,6 @@
 package de.witt3d_gis
 
 import android.os.Bundle
-import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.ProgressBar
@@ -18,6 +17,7 @@ import org.maplibre.android.offline.OfflineRegion
 import org.maplibre.android.offline.OfflineRegionError
 import org.maplibre.android.offline.OfflineRegionStatus
 import org.maplibre.android.offline.OfflineTilePyramidRegionDefinition
+import android.widget.AdapterView
 
 class MainActivity : AppCompatActivity() {
     private lateinit var mapView: MapView
@@ -27,13 +27,10 @@ class MainActivity : AppCompatActivity() {
     private var isDownloading = false
     private lateinit var progressBar: ProgressBar
 
-    // Replace with your own MapTiler API key
-    private val apiKey = "YOUR_MAPTILER_API_KEY"
-
     private val mapStyles = listOf(
-        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
-        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
-        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
+        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=get_your_own_OpIi9ZULNHzrESv6T2vL",
+        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=get_your_own_OpIi9ZULNHzrESv6T2vL",
+        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=get_your_own_OpIi9ZULNHzrESv6T2vL"
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,29 +52,6 @@ class MainActivity : AppCompatActivity() {
             if (::map.isInitialized && !isDownloading) {
                 downloadRegion()
             }
-        }
-
-        val styleSpinner = findViewById<Spinner>(R.id.styleSpinner)
-        val adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            mapStyles.map { it.first }
-        )
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        styleSpinner.adapter = adapter
-        styleSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(
-                parent: AdapterView<*>?,
-                view: android.view.View?,
-                position: Int,
-                id: Long
-            ) {
-                if (::map.isInitialized) {
-                    map.setStyle(mapStyles[position].second)
-                }
-            }
-
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
     }
 

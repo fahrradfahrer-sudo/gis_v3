@@ -12,6 +12,15 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <Spinner
+        android:id="@+id/styleSpinner"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
     <Button
         android:id="@+id/downloadButton"
         android:layout_width="wrap_content"
