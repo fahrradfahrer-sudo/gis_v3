@@ -93,7 +93,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     override fun onNewData(data: ByteArray) {
-        val str = String(data)
+        val str = String(data, Charsets.US_ASCII)
         buffer.append(str)
 
         var newlineIndex = buffer.indexOf("\n")
