@@ -42,7 +42,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var progressBar: ProgressBar
 
     private lateinit var serialLocationManager: SerialLocationManager
+    private lateinit var serialLocationEngine: SerialLocationEngine
     private var isSerialConnected = false
+    private var firstLocationReceived = false
     private lateinit var connectSerialButton: Button
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
@@ -68,8 +70,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
                     }
                     if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                        val baudRate = intent.getIntExtra("baudRate", 9600)
                         device?.let {
-                            serialLocationManager.connect(it)
+                            serialLocationManager.connect(it, baudRate)
                         }
                     } else {
                         Toast.makeText(context, "Permission denied for device $device", Toast.LENGTH_SHORT).show()
@@ -96,6 +99,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         offlineManager = OfflineManager.getInstance(this)
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
+        serialLocationEngine = SerialLocationEngine()
 
         val downloadButton = findViewById<Button>(R.id.downloadButton)
         downloadButton.setOnClickListener {
@@ -115,7 +119,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
         val filter = IntentFilter(ACTION_USB_PERMISSION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(usbReceiver, filter, RECEIVER_NOT_EXPORTED)
+            registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(usbReceiver, filter)
         }
@@ -172,6 +176,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             == PackageManager.PERMISSION_GRANTED) {
             map.locationComponent.apply {
                 val options = LocationComponentActivationOptions.builder(this@MainActivity, style)
+                    .locationEngine(serialLocationEngine)
                     .build()
                 activateLocationComponent(options)
                 isLocationComponentEnabled = true
@@ -207,16 +212,29 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val builder = AlertDialog.Builder(this)
         builder.setTitle("Select USB Device")
         builder.setItems(deviceNames) { _, which ->
-            val device = devices[which]
+            showBaudRateSelectionDialog(devices[which])
+        }
+        builder.show()
+    }
+
+    private fun showBaudRateSelectionDialog(device: UsbDevice) {
+        val baudRates = arrayOf("4800", "9600", "19200", "38400", "57600", "115200")
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Select Baud Rate")
+        builder.setItems(baudRates) { _, which ->
+            val baudRate = baudRates[which].toInt()
             val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
             if (usbManager.hasPermission(device)) {
-                serialLocationManager.connect(device)
+                serialLocationManager.connect(device, baudRate)
             } else {
+                val intent = Intent(ACTION_USB_PERMISSION).apply {
+                    putExtra("baudRate", baudRate)
+                }
                 val permissionIntent = PendingIntent.getBroadcast(
                     this,
                     0,
-                    Intent(ACTION_USB_PERMISSION),
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+                    intent,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
                 )
                 usbManager.requestPermission(device, permissionIntent)
             }
@@ -225,16 +243,18 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     override fun onLocationUpdate(location: SerialLocation) {
-        if (::map.isInitialized) {
-            val androidLocation = Location("serial").apply {
-                latitude = location.latitude
-                longitude = location.longitude
-                location.altitude?.let { altitude = it }
-                time = location.time
-                accuracy = location.accuracy ?: 1.0f
-            }
-            map.locationComponent.forceLocationUpdate(androidLocation)
+        if (!firstLocationReceived) {
+            firstLocationReceived = true
+            Toast.makeText(this, "Receiving data: ${location.latitude}, ${location.longitude}", Toast.LENGTH_SHORT).show()
         }
+        val androidLocation = Location("gps").apply {
+            latitude = location.latitude
+            longitude = location.longitude
+            location.altitude?.let { altitude = it }
+            time = location.time
+            accuracy = location.accuracy ?: 1.0f
+        }
+        serialLocationEngine.updateLocation(androidLocation)
     }
 
     override fun onError(message: String) {
@@ -249,6 +269,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onDisconnected() {
         isSerialConnected = false
+        firstLocationReceived = false
         connectSerialButton.text = "Connect Serial"
         Toast.makeText(this, "Serial Disconnected", Toast.LENGTH_SHORT).show()
     }

@@ -115,6 +115,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
     private fun parseNmea(sentence: String) {
         if (!sentence.startsWith("$")) return
+        Log.v(TAG, "NMEA: $sentence")
 
         // Basic checksum validation could be added here
 
@@ -131,6 +132,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
                 if (lat != null && lon != null && quality > 0) {
                     val location = SerialLocation(lat, lon, alt)
+                    Log.d(TAG, "Parsed GGA: $lat, $lon, alt=$alt")
                     mainHandler.post { listener?.onLocationUpdate(location) }
                 }
             } else if (type.endsWith("RMC") && parts.size >= 7) {
@@ -141,6 +143,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
                     if (lat != null && lon != null) {
                         val location = SerialLocation(lat, lon)
+                        Log.d(TAG, "Parsed RMC: $lat, $lon")
                         mainHandler.post { listener?.onLocationUpdate(location) }
                     }
                 }
