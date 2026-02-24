@@ -1,10 +1,12 @@
 package de.witt3d_gis
 
+import android.Manifest
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.location.Location
@@ -18,6 +20,8 @@ import android.widget.Spinner
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import org.maplibre.android.MapLibre
 import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.maps.MapView
@@ -42,6 +46,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var connectSerialButton: Button
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
+    private val PERMISSION_REQUEST_LOCATION = 1001
 
     // Replace with your own MapTiler API key
     private val apiKey = "YOUR_MAPTILER_API_KEY"
@@ -83,13 +88,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { map ->
             this.map = map
-            map.setStyle(mapStyles[0].second)
-
-            map.locationComponent.apply {
-                val options = LocationComponentActivationOptions.builder(this@MainActivity, map.style!!)
-                    .build()
-                activateLocationComponent(options)
-                isLocationComponentEnabled = true
+            map.setStyle(mapStyles[0].second) { style ->
+                enableLocationComponent(style)
             }
         }
 
@@ -136,7 +136,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 id: Long
             ) {
                 if (::map.isInitialized) {
-                    map.setStyle(mapStyles[position].second)
+                    map.setStyle(mapStyles[position].second) { style ->
+                        enableLocationComponent(style)
+                    }
                 }
             }
 
@@ -149,6 +151,48 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 "Please replace 'YOUR_MAPTILER_API_KEY' with your own API key.",
                 Toast.LENGTH_LONG
             ).show()
+        }
+
+        checkLocationPermission()
+    }
+
+    private fun checkLocationPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                PERMISSION_REQUEST_LOCATION
+            )
+        }
+    }
+
+    private fun enableLocationComponent(style: org.maplibre.android.maps.Style) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED) {
+            map.locationComponent.apply {
+                val options = LocationComponentActivationOptions.builder(this@MainActivity, style)
+                    .build()
+                activateLocationComponent(options)
+                isLocationComponentEnabled = true
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == PERMISSION_REQUEST_LOCATION) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (::map.isInitialized && map.style != null) {
+                    enableLocationComponent(map.style!!)
+                }
+            } else {
+                Toast.makeText(this, "Location permission is required for map positioning", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
