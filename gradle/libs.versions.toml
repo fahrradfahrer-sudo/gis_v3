@@ -9,7 +9,7 @@ appcompat = "1.7.1"
 material = "1.13.0"
 activity = "1.11.0"
 constraintlayout = "2.2.1"
-maplibre = "12.1.2"
+maplibre = "11.11.0"
 usb-serial = "3.8.0"
 
 [libraries]

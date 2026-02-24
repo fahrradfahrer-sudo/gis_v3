@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">Witt3D_GIS</string>
     <string name="download_map">Download</string>
+    <string name="maptiler_api_key">YOUR_MAPTILER_API_KEY</string>
 </resources>

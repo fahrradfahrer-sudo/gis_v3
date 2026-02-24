@@ -50,14 +50,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
 
-    // Replace with your own MapTiler API key
-    private val apiKey = "YOUR_MAPTILER_API_KEY"
+    private val apiKey by lazy { getString(R.string.maptiler_api_key) }
 
-    private val mapStyles = listOf(
-        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
-        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
-        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
-    )
+    private val mapStyles by lazy {
+        listOf(
+            "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
+            "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
+            "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
+        )
+    }
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -397,7 +398,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onDestroy() {
         super.onDestroy()
-        unregisterReceiver(usbReceiver)
+        try {
+            unregisterReceiver(usbReceiver)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         serialLocationManager.disconnect()
         offlineRegion?.setObserver(null)
         mapView.onDestroy()
