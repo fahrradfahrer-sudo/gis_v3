@@ -86,7 +86,11 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
     fun disconnect() {
         Log.d(TAG, "Disconnecting...")
-        usbIoManager?.stop()
+        try {
+            usbIoManager?.stop()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping IO manager", e)
+        }
         usbIoManager = null
         try {
             usbSerialPort?.close()
@@ -95,6 +99,11 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
         }
         usbSerialPort = null
         mainHandler.post { listener?.onDisconnected() }
+    }
+
+    fun release() {
+        disconnect()
+        executor.shutdownNow()
     }
 
     override fun onNewData(data: ByteArray) {

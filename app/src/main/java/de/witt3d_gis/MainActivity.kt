@@ -12,6 +12,7 @@ import android.hardware.usb.UsbManager
 import android.location.Location
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -46,19 +47,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private var isSerialConnected = false
     private var firstLocationReceived = false
     private lateinit var connectSerialButton: Button
+    private var pendingBaudRate: Int = 9600
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
 
-    private val apiKey by lazy { getString(R.string.maptiler_api_key) }
+    // IMPORTANT: Replace with your own MapTiler API key
+    private var apiKey = "YOUR_MAPTILER_API_KEY"
 
-    private val mapStyles by lazy {
-        listOf(
-            "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
-            "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
-            "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
-        )
-    }
+    private val mapStyles = listOf(
+        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
+        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
+        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
+    )
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -71,9 +72,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
                     }
                     if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
-                        val baudRate = intent.getIntExtra("baudRate", 9600)
                         device?.let {
-                            serialLocationManager.connect(it, baudRate)
+                            serialLocationManager.connect(it, pendingBaudRate)
                         }
                     } else {
                         Toast.makeText(context, "Permission denied for device $device", Toast.LENGTH_SHORT).show()
@@ -85,6 +85,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
+            Looper.prepare()
+            Toast.makeText(this, "CRASH: ${throwable.message}", Toast.LENGTH_LONG).show()
+            throwable.printStackTrace()
+            Looper.loop()
+        }
+
         MapLibre.getInstance(this)
         setContentView(R.layout.activity_main)
 
@@ -153,7 +161,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (apiKey == "YOUR_MAPTILER_API_KEY") {
             Toast.makeText(
                 this,
-                "Please replace 'YOUR_MAPTILER_API_KEY' with your own API key.",
+                "Please replace 'YOUR_MAPTILER_API_KEY' with your own API key in MainActivity.kt.",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -175,12 +183,16 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private fun enableLocationComponent(style: org.maplibre.android.maps.Style) {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
             == PackageManager.PERMISSION_GRANTED) {
-            map.locationComponent.apply {
-                val options = LocationComponentActivationOptions.builder(this@MainActivity, style)
-                    .locationEngine(serialLocationEngine)
-                    .build()
-                activateLocationComponent(options)
-                isLocationComponentEnabled = true
+            try {
+                map.locationComponent.apply {
+                    val options = LocationComponentActivationOptions.builder(this@MainActivity, style)
+                        .locationEngine(serialLocationEngine)
+                        .build()
+                    activateLocationComponent(options)
+                    isLocationComponentEnabled = true
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this, "Error enabling location component: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -223,14 +235,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val builder = AlertDialog.Builder(this)
         builder.setTitle("Select Baud Rate")
         builder.setItems(baudRates) { _, which ->
-            val baudRate = baudRates[which].toInt()
+            pendingBaudRate = baudRates[which].toInt()
             val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
             if (usbManager.hasPermission(device)) {
-                serialLocationManager.connect(device, baudRate)
+                serialLocationManager.connect(device, pendingBaudRate)
             } else {
-                val intent = Intent(ACTION_USB_PERMISSION).apply {
-                    putExtra("baudRate", baudRate)
-                }
+                val intent = Intent(ACTION_USB_PERMISSION)
                 val permissionIntent = PendingIntent.getBroadcast(
                     this,
                     0,
@@ -403,7 +413,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        serialLocationManager.disconnect()
+        serialLocationManager.release()
         offlineRegion?.setObserver(null)
         mapView.onDestroy()
     }
