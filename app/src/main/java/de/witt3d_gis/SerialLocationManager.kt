@@ -39,63 +39,92 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     var listener: LocationListener? = null
 
     fun getAvailableDevices(): List<UsbDevice> {
-        val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
-        return availableDrivers.map { it.device }
+        return try {
+            Log.d(TAG, "Scanning for USB devices...")
+            val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+            Log.d(TAG, "Found ${availableDrivers.size} drivers")
+            availableDrivers.map { it.device }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finding devices: ${e.message}", e)
+            emptyList()
+        }
     }
 
     fun connect(device: UsbDevice, baudRate: Int = 9600) {
-        Log.d(TAG, "Attempting to connect to ${device.deviceName} at $baudRate baud")
+        Log.d(TAG, "Connecting to ${device.deviceName} at $baudRate baud")
         try {
-            val driver = UsbSerialProber.getDefaultProber().probeDevice(device)
+            val prober = UsbSerialProber.getDefaultProber()
+            val driver = prober.probeDevice(device)
             if (driver == null) {
-                Log.e(TAG, "No driver found for device")
-                listener?.onError("No driver found for device")
+                sendError("No serial driver found for this USB device")
                 return
             }
 
             if (driver.ports.isEmpty()) {
-                Log.e(TAG, "No ports available on device")
-                listener?.onError("No ports available on device")
+                sendError("No serial ports available on this device")
                 return
             }
 
+            Log.d(TAG, "Opening USB connection...")
             val connection = usbManager.openDevice(driver.device)
             if (connection == null) {
-                Log.e(TAG, "Could not open device connection")
-                listener?.onError("Could not open device connection")
+                val hasPerm = usbManager.hasPermission(device)
+                sendError("Could not open USB connection (Permission=$hasPerm)")
                 return
             }
 
             val port = driver.ports[0]
-            port.open(connection)
-            port.setParameters(baudRate, 8, UsbSerialPort.DATABITS_8, UsbSerialPort.STOPBITS_1)
+            Log.d(TAG, "Opening port 0...")
+            try {
+                port.open(connection)
+                port.setParameters(baudRate, 8, UsbSerialPort.DATABITS_8, UsbSerialPort.STOPBITS_1)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open port: ${e.message}", e)
+                sendError("Error opening port: ${e.message}")
+                return
+            }
+
             usbSerialPort = port
 
-            val ioManager = SerialInputOutputManager(usbSerialPort, this)
-            usbIoManager = ioManager
-            executor.submit(ioManager)
+            Log.d(TAG, "Starting IO manager...")
+            try {
+                val ioManager = SerialInputOutputManager(usbSerialPort, this)
+                usbIoManager = ioManager
+                executor.submit(ioManager)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start IO manager: ${e.message}", e)
+                sendError("IO Manager error: ${e.message}")
+                port.close()
+                usbSerialPort = null
+                return
+            }
 
             mainHandler.post { listener?.onConnected() }
-            Log.d(TAG, "Connected successfully")
+            Log.d(TAG, "Connected and listening")
         } catch (e: Exception) {
-            Log.e(TAG, "Error during connection", e)
-            mainHandler.post { listener?.onError("Connection error: ${e.message}") }
+            Log.e(TAG, "Critical connection error: ${e.message}", e)
+            sendError("Critical connection error: ${e.message}")
             disconnect()
         }
     }
 
+    private fun sendError(message: String) {
+        Log.e(TAG, message)
+        mainHandler.post { listener?.onError(message) }
+    }
+
     fun disconnect() {
-        Log.d(TAG, "Disconnecting...")
+        Log.d(TAG, "Disconnecting serial...")
         try {
             usbIoManager?.stop()
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping IO manager", e)
+            Log.e(TAG, "Error stopping IO manager: ${e.message}")
         }
         usbIoManager = null
         try {
             usbSerialPort?.close()
         } catch (e: Exception) {
-            Log.e(TAG, "Error closing port", e)
+            Log.e(TAG, "Error closing port: ${e.message}")
         }
         usbSerialPort = null
         mainHandler.post { listener?.onDisconnected() }
@@ -103,7 +132,12 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
     fun release() {
         disconnect()
-        executor.shutdownNow()
+        try {
+            executor.shutdownNow()
+            Log.d(TAG, "Executor shutdown")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error shutting down executor: ${e.message}")
+        }
     }
 
     override fun onNewData(data: ByteArray) {
@@ -115,33 +149,34 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             while (newlineIndex != -1) {
                 val sentence = buffer.substring(0, newlineIndex).trim()
                 buffer.delete(0, newlineIndex + 1)
-                if (sentence.isNotEmpty()) {
+                if (sentence.isNotEmpty() && sentence.startsWith("$")) {
                     parseNmea(sentence)
                 }
                 newlineIndex = buffer.indexOf("\n")
             }
+
+            // Prevent buffer from growing infinitely if no newlines are found
+            if (buffer.length > 4096) {
+                Log.w(TAG, "Buffer overflow, clearing...")
+                buffer.setLength(0)
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling new data", e)
+            Log.e(TAG, "Error in onNewData: ${e.message}")
         }
     }
 
     override fun onRunError(e: Exception) {
-        Log.e(TAG, "Serial run error", e)
-        mainHandler.post {
-            listener?.onError("Serial error: ${e.message}")
-            disconnect()
-        }
+        Log.e(TAG, "Serial runtime error: ${e.message}", e)
+        sendError("Serial runtime error: ${e.message}")
+        disconnect()
     }
 
     private fun parseNmea(sentence: String) {
-        if (!sentence.startsWith("$")) return
-        Log.v(TAG, "NMEA: $sentence")
-
-        val parts = sentence.split(",")
-        if (parts.isEmpty()) return
-
-        val type = parts[0]
         try {
+            val parts = sentence.split(",")
+            if (parts.isEmpty()) return
+
+            val type = parts[0]
             if (type.endsWith("GGA") && parts.size >= 10) {
                 val lat = parseLatitude(parts[2], parts[3])
                 val lon = parseLongitude(parts[4], parts[5])
@@ -150,7 +185,6 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
                 if (lat != null && lon != null && quality > 0) {
                     val location = SerialLocation(lat, lon, alt)
-                    Log.d(TAG, "Parsed GGA: $lat, $lon, alt=$alt")
                     mainHandler.post { listener?.onLocationUpdate(location) }
                 }
             } else if (type.endsWith("RMC") && parts.size >= 7) {
@@ -161,13 +195,13 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
                     if (lat != null && lon != null) {
                         val location = SerialLocation(lat, lon)
-                        Log.d(TAG, "Parsed RMC: $lat, $lon")
                         mainHandler.post { listener?.onLocationUpdate(location) }
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing NMEA: $sentence", e)
+            // Silently ignore parse errors for individual sentences unless debugging
+            // Log.v(TAG, "Parse error for: $sentence")
         }
     }
 
