@@ -77,7 +77,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             Log.d(TAG, "Opening port 0...")
             try {
                 port.open(connection)
-                port.setParameters(baudRate, 8, UsbSerialPort.DATABITS_8, UsbSerialPort.STOPBITS_1)
+                port.setParameters(baudRate, UsbSerialPort.DATABITS_8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to open port: ${e.message}", e)
                 sendError("Error opening port: ${e.message}")
@@ -143,6 +143,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     override fun onNewData(data: ByteArray) {
         try {
             val str = String(data, Charsets.US_ASCII)
+            Log.v(TAG, "Received: $str")
             buffer.append(str)
 
             var newlineIndex = buffer.indexOf("\n")

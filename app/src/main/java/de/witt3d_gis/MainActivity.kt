@@ -142,10 +142,16 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private fun loadStyle(url: String) {
         updateStatus("Loading style...")
-        map.setStyle(url) { style ->
-            updateStatus("Map Ready")
-            enableLocationComponent(style)
+        mapView.addOnDidFailLoadingMapListener { errorMessage ->
+            Log.e(TAG, "Map loading failed: $errorMessage")
+            updateStatus("Map Error: $errorMessage")
         }
+        map.setStyle(url, object : Style.OnStyleLoaded {
+            override fun onStyleLoaded(style: Style) {
+                updateStatus("Map Ready")
+                enableLocationComponent(style)
+            }
+        })
     }
 
     private fun updateStatus(msg: String) {
