@@ -90,9 +90,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     }
                     if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                         log("USB Permission granted for ${device?.deviceName}")
-                        device?.let {
-                            serialLocationManager.connect(it, pendingBaudRate)
-                        }
+                        device?.let { connectToDevice(it, pendingBaudRate) }
                     } else {
                         log("USB Permission denied for ${device?.deviceName}")
                         updateStatus("USB Permission denied")
@@ -105,44 +103,30 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Custom Crash Handler to show info on screen
+        // 1. Set crash handler early and safely
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            val stackTrace = Log.getStackTraceString(throwable)
-            Log.e(TAG, "Uncaught exception in thread ${thread.name}\n$stackTrace")
+            Log.e(TAG, "FATAL CRASH in thread ${thread.name}", throwable)
             Handler(Looper.getMainLooper()).post {
-                AlertDialog.Builder(this)
-                    .setTitle("App Crashed")
-                    .setMessage("Error: ${throwable.message}\n\nCheck Log Console for details.")
-                    .setPositiveButton("OK", null)
-                    .show()
-                log("CRASH: ${throwable.message}\n$stackTrace")
+                Toast.makeText(this, "APP CRASHED: ${throwable.message}", Toast.LENGTH_LONG).show()
             }
         }
 
-        log("App Starting...")
-
-        try {
-            MapLibre.getInstance(this)
-            log("MapLibre initialized")
-        } catch (e: Exception) {
-            log("MapLibre init error: ${e.message}")
-        }
-
+        // 2. Initialize UI immediately
         setContentView(R.layout.activity_main)
-
         statusText = findViewById(R.id.statusText)
         logText = findViewById(R.id.logText)
         logScroll = findViewById(R.id.logScroll)
         mapView = findViewById(R.id.mapView)
 
-        mapView.onCreate(savedInstanceState)
+        log("App Starting...")
+        updateStatus("Initializing...")
 
-        updateStatus("Checking API Key...")
+        // 3. Check API Key
         if (MAPTILER_API_KEY == "YOUR_MAPTILER_API_KEY" || MAPTILER_API_KEY.isEmpty()) {
             log("ERROR: MapTiler API Key is not set!")
             AlertDialog.Builder(this)
                 .setTitle("API Key Missing")
-                .setMessage("Please edit MainActivity.kt and replace 'YOUR_MAPTILER_API_KEY' with your valid MapTiler API key.")
+                .setMessage("Please enter your MapTiler API key in MainActivity.kt.")
                 .setCancelable(false)
                 .setPositiveButton("OK", null)
                 .show()
@@ -151,17 +135,30 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             log("API Key found")
         }
 
+        // 4. Initialize MapLibre
+        try {
+            updateStatus("Initializing Map SDK...")
+            MapLibre.getInstance(this)
+            log("MapLibre initialized")
+        } catch (e: Exception) {
+            log("MapLibre init error: ${e.message}")
+            updateStatus("SDK Init Error")
+        }
+
+        mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { map ->
             this.map = map
             log("Map object ready")
             loadStyle(mapStyles[0].second)
         }
 
+        // 5. Initialize Managers
         offlineManager = OfflineManager.getInstance(this)
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
         serialLocationEngine = SerialLocationEngine()
 
+        // 6. Setup Buttons & Listeners
         val downloadButton = findViewById<Button>(R.id.downloadButton)
         downloadButton.setOnClickListener {
             if (::map.isInitialized && !isDownloading) {
@@ -230,9 +227,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         val formattedMessage = "[$timestamp] $message\n"
         Log.d(TAG, message)
-        runOnUiThread {
-            logText.append(formattedMessage)
-            logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+        if (::logText.isInitialized) {
+            runOnUiThread {
+                logText.append(formattedMessage)
+                logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+            }
         }
     }
 
@@ -263,7 +262,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     activateLocationComponent(options)
                     isLocationComponentEnabled = true
                 }
-                log("LocationComponent activated with SerialLocationEngine")
+                log("LocationComponent activated")
             } catch (e: Exception) {
                 log("Location error: ${e.message}")
                 updateStatus("Location Component Error")
@@ -277,19 +276,18 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_LOCATION) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                log("Location permission granted by user")
+                log("Location permission granted")
                 if (::map.isInitialized && map.style != null) {
                     enableLocationComponent(map.style!!)
                 }
             } else {
-                log("Location permission denied by user")
-                Toast.makeText(this, "Location permission is required", Toast.LENGTH_LONG).show()
+                log("Location permission denied")
             }
         }
     }
 
     private fun showDeviceSelectionDialog() {
-        log("Finding USB devices...")
+        log("Scanning for USB devices...")
         val devices = serialLocationManager.getAvailableDevices()
         if (devices.isEmpty()) {
             log("No USB serial devices found")
@@ -317,10 +315,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 log("Selected baud rate: $pendingBaudRate")
                 val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
                 if (usbManager.hasPermission(device)) {
-                    log("USB permission already granted, connecting...")
-                    serialLocationManager.connect(device, pendingBaudRate)
+                    connectToDevice(device, pendingBaudRate)
                 } else {
-                    log("Requesting USB permission for ${device.deviceName}")
+                    log("Requesting USB permission...")
                     val intent = Intent(ACTION_USB_PERMISSION)
                     intent.setPackage(packageName)
                     val permissionIntent = PendingIntent.getBroadcast(
@@ -336,12 +333,25 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         builder.show()
     }
 
+    private fun connectToDevice(device: UsbDevice, baudRate: Int) {
+        log("Connecting to device in background...")
+        updateStatus("Connecting...")
+        Thread {
+            try {
+                serialLocationManager.connect(device, baudRate)
+            } catch (e: Exception) {
+                log("Thread connection error: ${e.message}")
+            }
+        }.start()
+    }
+
     override fun onLocationUpdate(location: SerialLocation) {
         if (!firstLocationReceived) {
             firstLocationReceived = true
-            log("First location fix received!")
-            updateStatus("Fix: ${String.format("%.6f", location.latitude)}, ${String.format("%.6f", location.longitude)}")
+            log("Position Fix Received!")
         }
+        updateStatus("Fix: ${String.format("%.6f", location.latitude)}, ${String.format("%.6f", location.longitude)}")
+
         val androidLocation = Location("gps").apply {
             latitude = location.latitude
             longitude = location.longitude
@@ -362,15 +372,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onConnected() {
         isSerialConnected = true
-        connectSerialButton.text = "Disconnect"
-        log("Serial connected successfully")
+        runOnUiThread { connectSerialButton.text = "Disconnect" }
+        log("Serial connected")
         updateStatus("Serial Connected")
     }
 
     override fun onDisconnected() {
         isSerialConnected = false
         firstLocationReceived = false
-        connectSerialButton.text = "Connect Serial"
+        runOnUiThread { connectSerialButton.text = "Connect Serial" }
         log("Serial disconnected")
         updateStatus("Serial Disconnected")
     }
@@ -407,7 +417,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         val percentage = if (status.isRequiredResourceCountPrecise) {
                             (100.0 * status.completedResourceCount / status.requiredResourceCount).toInt()
                         } else 0
-                        progressBar.progress = percentage
+                        runOnUiThread { progressBar.progress = percentage }
                         if (status.isComplete) {
                             dialog.dismiss()
                             isDownloading = false
