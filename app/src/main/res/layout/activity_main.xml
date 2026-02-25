@@ -23,16 +23,6 @@
         app:layout_constraintTop_toTopOf="parent" />
 
     <Button
-        android:id="@+id/downloadButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="16dp"
-        android:text="@string/download_map"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        android:layout_marginStart="16dp" />
-
-    <Button
         android:id="@+id/connectSerialButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -40,41 +30,19 @@
         android:text="Connect Serial"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        android:layout_marginEnd="16dp" />
+        app:layout_constraintStart_toStartOf="parent" />
 
     <TextView
         android:id="@+id/statusText"
-        android:layout_width="0dp"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_margin="16dp"
-        android:background="#B0FFFFFF"
-        android:padding="8dp"
-        android:text="Status: Initializing..."
+        android:layout_marginBottom="8dp"
+        android:background="#A0FFFFFF"
+        android:padding="4dp"
+        android:text="Status: Initializing"
         android:textColor="@android:color/black"
-        android:textStyle="bold"
-        app:layout_constraintBottom_toTopOf="@id/downloadButton"
+        app:layout_constraintBottom_toTopOf="@id/connectSerialButton"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
-
-    <ScrollView
-        android:id="@+id/logScroll"
-        android:layout_width="0dp"
-        android:layout_height="150dp"
-        android:layout_margin="16dp"
-        android:background="#D0000000"
-        android:padding="4dp"
-        app:layout_constraintBottom_toTopOf="@id/statusText"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent">
-
-        <TextView
-            android:id="@+id/logText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:text="--- Log Console ---\n"
-            android:textColor="#00FF00"
-            android:textSize="10sp" />
-    </ScrollView>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
