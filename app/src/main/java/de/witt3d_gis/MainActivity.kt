@@ -39,8 +39,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val TAG = "MainActivity"
 
     // --- IMPORTANT: ENTER YOUR MAPTILER API KEY HERE ---
-    // You can also set it in app/src/main/res/values/strings.xml (maptiler_api_key)
-    private var MAPTILER_API_KEY = "YOUR_MAPTILER_API_KEY"
+    private val apiKey = "YOUR_MAPTILER_API_KEY"
 
     private lateinit var mapView: MapView
     private lateinit var map: MapLibreMap
@@ -57,12 +56,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
 
-    private val mapStyles: List<Pair<String, String>>
-        get() = listOf(
-            "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$MAPTILER_API_KEY",
-            "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$MAPTILER_API_KEY",
-            "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$MAPTILER_API_KEY"
-        )
+    private val mapStyles = listOf(
+        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
+        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
+        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
+    )
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -88,11 +86,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         super.onCreate(savedInstanceState)
 
         // Initialize MapLibre BEFORE anything else
-        try {
-            MapLibre.getInstance(this)
-        } catch (e: Exception) {
-            Log.e(TAG, "MapLibre Init Failed", e)
-        }
+        MapLibre.getInstance(this)
 
         setContentView(R.layout.activity_main)
 
@@ -105,24 +99,18 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         serialLocationManager.listener = this
         serialLocationEngine = SerialLocationEngine()
 
-        // Use key from strings.xml if provided and the constant is still placeholder
-        if (MAPTILER_API_KEY == "YOUR_MAPTILER_API_KEY") {
-            val resKey = getString(R.string.maptiler_api_key)
-            if (resKey != "YOUR_MAPTILER_API_KEY") {
-                MAPTILER_API_KEY = resKey
-            }
-        }
-
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { mapObj ->
             this.map = mapObj
-            if (MAPTILER_API_KEY == "YOUR_MAPTILER_API_KEY" || MAPTILER_API_KEY.isEmpty()) {
+
+            mapView.addOnDidFailLoadingMapListener { error ->
+                Log.e(TAG, "Map Loading Error: $error")
+                updateStatus("Map Error: $error")
+            }
+
+            if (apiKey == "YOUR_MAPTILER_API_KEY") {
                 updateStatus("ERROR: No API Key")
-                AlertDialog.Builder(this)
-                    .setTitle("API Key Missing")
-                    .setMessage("Please set your MapTiler API key in MainActivity.kt")
-                    .setPositiveButton("OK", null)
-                    .show()
+                Toast.makeText(this, "Please set your MapTiler API key in MainActivity.kt", Toast.LENGTH_LONG).show()
             } else {
                 loadStyle(mapStyles[0].second)
             }
@@ -166,16 +154,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private fun loadStyle(url: String) {
         updateStatus("Loading style...")
-        mapView.addOnDidFailLoadingMapListener { errorMessage ->
-            Log.e(TAG, "Map loading failed: $errorMessage")
-            updateStatus("Map Error: $errorMessage")
+        map.setStyle(url) { style ->
+            updateStatus("Map Ready")
+            enableLocationComponent(style)
         }
-        map.setStyle(url, object : Style.OnStyleLoaded {
-            override fun onStyleLoaded(style: Style) {
-                updateStatus("Map Ready")
-                enableLocationComponent(style)
-            }
-        })
     }
 
     private fun updateStatus(msg: String) {
@@ -292,7 +274,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onDisconnected() {
         isSerialConnected = false
-        runOnUiThread { connectSerialButton.text = "Connect Serial" }
+        runOnUiThread { connectSerialButton.text = "Connect" }
         updateStatus("Serial Disconnected")
     }
 
