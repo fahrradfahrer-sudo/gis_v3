@@ -41,7 +41,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val TAG = "MainActivity"
 
     // --- IMPORTANT: ENTER YOUR MAPTILER API KEY HERE ---
-    private val apiKey = "YOUR_MAPTILER_API_KEY"
+    private var apiKey = "YOUR_MAPTILER_API_KEY"
 
     private lateinit var mapView: MapView
     private lateinit var map: MapLibreMap
@@ -130,20 +130,36 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
         }
 
+        // Try to load API key from strings.xml if constant is not set
+        if (apiKey == "YOUR_MAPTILER_API_KEY") {
+            try {
+                val resId = resources.getIdentifier("maptiler_api_key", "string", packageName)
+                if (resId != 0) {
+                    val resKey = getString(resId)
+                    if (resKey.isNotEmpty() && resKey != "YOUR_MAPTILER_API_KEY") {
+                        apiKey = resKey
+                        Log.d(TAG, "Loaded API key from strings.xml")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading key from resources: ${e.message}")
+            }
+        }
+
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { mapObj ->
             this.map = mapObj
 
             mapView.addOnDidFailLoadingMapListener { error ->
-                Log.e(TAG, "Map Loading Error: $error")
-                updateStatus("Map Error: $error")
+                val maskedKey = if (apiKey.length > 6) "${apiKey.take(3)}...${apiKey.takeLast(3)}" else apiKey
+                Log.e(TAG, "Map Loading Error (Key: $maskedKey): $error")
+                updateStatus("Map Error (Key: $maskedKey): $error")
             }
 
-            if (apiKey == "YOUR_MAPTILER_API_KEY") {
-                updateStatus("ERROR: No API Key")
-                Toast.makeText(this, "Please set your MapTiler API key in MainActivity.kt", Toast.LENGTH_LONG).show()
+            if (apiKey == "YOUR_MAPTILER_API_KEY" || apiKey.isEmpty()) {
+                updateStatus("ERROR: No API Key set in MainActivity.kt")
+                Toast.makeText(this, "Please set your MapTiler API key!", Toast.LENGTH_LONG).show()
             } else {
-                // Simplest style load, same as working branch
                 map.setStyle(mapStyles[0].second) { style ->
                     updateStatus("Map Ready")
                     enableLocationComponent(style)
