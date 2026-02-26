@@ -11,7 +11,8 @@ import java.util.concurrent.Executors
 
 class NtripManager {
     private val TAG = "NtripManager"
-    private val executor = Executors.newSingleThreadExecutor()
+    // Use cached thread pool to allow concurrent reading and writing
+    private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var socket: Socket? = null
@@ -34,60 +35,51 @@ class NtripManager {
 
         executor.submit {
             try {
-                Log.d(TAG, "Connecting to NTRIP caster $host:$port...")
+                Log.i(TAG, "Connecting to NTRIP caster $host:$port...")
                 socket = Socket(host, port)
-                socket?.soTimeout = 15000 // 15s timeout
+                socket?.soTimeout = 15000
 
                 outputStream = socket?.getOutputStream()
                 inputStream = socket?.getInputStream()
 
                 val auth = Base64.encodeToString("$user:$pass".toByteArray(), Base64.NO_WRAP)
-                val request = "GET /$mountpoint HTTP/1.1\r\n" +
-                              "Host: $host\r\n" +
+                // Use HTTP/1.0 for better compatibility
+                val request = "GET /$mountpoint HTTP/1.0\r\n" +
                               "User-Agent: NTRIP Witt3D_GIS\r\n" +
                               "Authorization: Basic $auth\r\n" +
                               "Connection: close\r\n" +
-                              "Ntrip-Version: Ntrip/2.0\r\n" +
                               "\r\n"
 
-                Log.d(TAG, "Sending NTRIP request: GET /$mountpoint")
                 outputStream?.write(request.toByteArray())
                 outputStream?.flush()
 
-                // Read HTTP response header
                 val buffer = ByteArray(1024)
                 val bytesRead = inputStream?.read(buffer) ?: 0
-                if (bytesRead <= 0) {
-                    throw Exception("No response from caster")
-                }
+                if (bytesRead <= 0) throw Exception("No response from caster")
 
                 val response = String(buffer, 0, bytesRead)
-                Log.d(TAG, "NTRIP Response: ${response.split("\r\n")[0]}")
+                Log.i(TAG, "NTRIP Response: ${response.split("\r\n")[0]}")
 
-                if (response.contains("ICY 200 OK") || response.contains("HTTP/1.0 200 OK") || response.contains("HTTP/1.1 200 OK")) {
-                    Log.d(TAG, "NTRIP Connected successfully")
+                if (response.contains("ICY 200 OK") || response.contains("200 OK")) {
                     mainHandler.post { listener?.onConnected() }
 
-                    // Start reading RTCM stream
                     val rtcmBuffer = ByteArray(4096)
+                    var totalReceived = 0L
                     while (isRunning) {
                         val read = inputStream?.read(rtcmBuffer) ?: -1
-                        if (read == -1) {
-                            Log.d(TAG, "NTRIP Stream closed by server")
-                            break
-                        }
+                        if (read == -1) break
                         if (read > 0) {
+                            totalReceived += read
                             val data = rtcmBuffer.copyOfRange(0, read)
                             mainHandler.post { listener?.onRtcmData(data) }
+                            if (totalReceived % 10240 == 0L) Log.d(TAG, "Received ${totalReceived/1024} KB RTCM")
                         }
                     }
                 } else {
-                    val errorMsg = if (response.isNotEmpty()) response.split("\r\n")[0] else "No response"
-                    Log.e(TAG, "NTRIP Connection failed: $errorMsg")
-                    mainHandler.post { listener?.onError("NTRIP Error: $errorMsg") }
+                    mainHandler.post { listener?.onError("Caster error: ${response.split("\r\n")[0]}") }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "NTRIP Socket error: ${e.message}")
+                Log.e(TAG, "NTRIP error: ${e.message}")
                 mainHandler.post { listener?.onError("NTRIP Socket Error: ${e.message}") }
             } finally {
                 disconnectInternal()
@@ -98,13 +90,17 @@ class NtripManager {
     fun sendGga(gga: String) {
         executor.submit {
             try {
-                if (isRunning && socket?.isConnected == true && outputStream != null) {
+                val out = outputStream
+                if (isRunning && socket?.isConnected == true && out != null) {
                     val message = if (gga.endsWith("\r\n")) gga else "$gga\r\n"
-                    outputStream?.write(message.toByteArray())
-                    outputStream?.flush()
+                    synchronized(out) {
+                        out.write(message.toByteArray())
+                        out.flush()
+                    }
+                    Log.v(TAG, "NTRIP: Sent GGA (${message.length} bytes)")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error sending GGA to NTRIP: ${e.message}")
+                Log.e(TAG, "Error sending GGA: ${e.message}")
             }
         }
     }
@@ -119,9 +115,7 @@ class NtripManager {
             inputStream?.close()
             outputStream?.close()
             socket?.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error closing NTRIP connection: ${e.message}")
-        }
+        } catch (e: Exception) {}
         socket = null
         inputStream = null
         outputStream = null

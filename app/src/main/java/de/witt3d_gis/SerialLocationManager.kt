@@ -24,7 +24,8 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private var usbSerialPort: UsbSerialPort? = null
     private var usbIoManager: SerialInputOutputManager? = null
-    private val executor = Executors.newSingleThreadExecutor()
+    // Use cached thread pool to allow concurrent writing while the IO manager is running
+    private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var buffer = StringBuilder()
@@ -144,7 +145,13 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     fun write(data: ByteArray) {
         executor.submit {
             try {
-                usbSerialPort?.write(data, 1000)
+                val port = usbSerialPort
+                if (port != null && port.isOpen) {
+                    synchronized(port) {
+                        port.write(data, 1000)
+                    }
+                    Log.v(TAG, "Serial: Sent ${data.size} bytes RTCM")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error writing to serial: ${e.message}")
             }

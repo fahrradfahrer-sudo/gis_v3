@@ -63,10 +63,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val PERMISSION_REQUEST_LOCATION = 1001
 
     private val mapStyles = listOf(
-        "MapLibre Demo" to "https://demotiles.maplibre.org/style.json",
         "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
         "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
-        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
+        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey",
+        "MapLibre Demo" to "https://demotiles.maplibre.org/style.json"
     )
 
     private val usbReceiver = object : BroadcastReceiver() {
@@ -89,20 +89,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Initialize MapLibre BEFORE anything else
         MapLibre.getInstance(this)
-
         setContentView(R.layout.activity_main)
 
-        // Find views - ENSURE NO downloadButton REFERENCE HERE
         statusText = findViewById(R.id.statusText)
         mapView = findViewById(R.id.mapView)
         connectSerialButton = findViewById(R.id.connectSerialButton)
         followButton = findViewById(R.id.followButton)
         ntripButton = findViewById(R.id.ntripButton)
 
-        // Initialize managers
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
         serialLocationEngine = SerialLocationEngine()
@@ -114,14 +109,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
             override fun onError(message: String) {
                 updateStatus("NTRIP Error: $message")
+                Log.e(TAG, "NTRIP Error reported: $message")
             }
             override fun onConnected() {
                 isNtripConnected = true
+                Log.i(TAG, "NTRIP Connected callback")
                 runOnUiThread { ntripButton.text = "NTRIP Stop" }
                 updateStatus("NTRIP Connected")
             }
             override fun onDisconnected() {
                 isNtripConnected = false
+                Log.i(TAG, "NTRIP Disconnected callback")
                 runOnUiThread { ntripButton.text = "NTRIP" }
                 updateStatus("NTRIP Disconnected")
             }
@@ -130,16 +128,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { mapObj ->
             this.map = mapObj
-
             mapView.addOnDidFailLoadingMapListener { error ->
-                val masked = if (apiKey.length > 6) "${apiKey.take(3)}...${apiKey.takeLast(3)}" else apiKey
-                Log.e(TAG, "Map Error (Key=$masked): $error")
-                updateStatus("Map Error: $error (Key: $masked)")
+                updateStatus("Map Error: $error")
             }
-
-            // Always try to load the first style (Demo) to verify engine
-            val initialUrl = mapStyles[0].second
-            loadStyle(initialUrl)
+            loadStyle(mapStyles[0].second)
         }
 
         connectSerialButton.setOnClickListener {
@@ -170,9 +162,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         styleSpinner.adapter = adapter
         styleSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (::map.isInitialized) {
-                    loadStyle(mapStyles[position].second)
-                }
+                if (::map.isInitialized) loadStyle(mapStyles[position].second)
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
@@ -301,7 +291,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     // --- SerialLocationManager.LocationListener implementation ---
 
     override fun onGgaReceived(sentence: String) {
-        if (isNtripConnected) ntripManager.sendGga(sentence)
+        if (isNtripConnected) {
+            Log.v(TAG, "NTRIP: Forwarding GGA to caster")
+            ntripManager.sendGga(sentence)
+        }
     }
 
     override fun onLocationUpdate(location: SerialLocation) {
