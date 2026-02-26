@@ -18,6 +18,8 @@ import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
@@ -39,28 +41,33 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val TAG = "MainActivity"
 
     // --- IMPORTANT: ENTER YOUR MAPTILER API KEY HERE ---
-    private val apiKey = "YOUR_MAPTILER_API_KEY"
+    private var apiKey = "YOUR_MAPTILER_API_KEY"
 
     private lateinit var mapView: MapView
     private lateinit var map: MapLibreMap
     private lateinit var statusText: TextView
     private lateinit var connectSerialButton: Button
     private lateinit var followButton: Button
+    private lateinit var ntripButton: Button
 
     private lateinit var serialLocationManager: SerialLocationManager
     private lateinit var serialLocationEngine: SerialLocationEngine
+    private lateinit var ntripManager: NtripManager
+
     private var isSerialConnected = false
+    private var isNtripConnected = false
     private var pendingBaudRate: Int = 9600
     private var isFirstFix = true
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
 
-    private val mapStyles = listOf(
-        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
-        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
-        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
-    )
+    private val mapStyles: List<Pair<String, String>>
+        get() = listOf(
+            "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
+            "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
+            "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
+        )
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -94,10 +101,42 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView = findViewById(R.id.mapView)
         connectSerialButton = findViewById(R.id.connectSerialButton)
         followButton = findViewById(R.id.followButton)
+        ntripButton = findViewById(R.id.ntripButton)
 
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
         serialLocationEngine = SerialLocationEngine()
+
+        ntripManager = NtripManager()
+        ntripManager.listener = object : NtripManager.NtripListener {
+            override fun onRtcmData(data: ByteArray) {
+                if (isSerialConnected) {
+                    serialLocationManager.write(data)
+                }
+            }
+            override fun onError(message: String) {
+                updateStatus("NTRIP Error: $message")
+                runOnUiThread { Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show() }
+            }
+            override fun onConnected() {
+                isNtripConnected = true
+                runOnUiThread { ntripButton.text = "NTRIP Stop" }
+                updateStatus("NTRIP Connected")
+            }
+            override fun onDisconnected() {
+                isNtripConnected = false
+                runOnUiThread { ntripButton.text = "NTRIP" }
+                updateStatus("NTRIP Disconnected")
+            }
+        }
+
+        // Robust API key detection: check constant AND strings.xml
+        if (apiKey == "YOUR_MAPTILER_API_KEY") {
+            val resKey = getString(R.string.maptiler_api_key)
+            if (resKey != "YOUR_MAPTILER_API_KEY") {
+                apiKey = resKey
+            }
+        }
 
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { mapObj ->
@@ -128,6 +167,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             if (::map.isInitialized && map.locationComponent.isLocationComponentActivated) {
                 map.locationComponent.cameraMode = CameraMode.TRACKING
                 Toast.makeText(this, "Following location", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        ntripButton.setOnClickListener {
+            if (isNtripConnected) {
+                ntripManager.disconnect()
+            } else {
+                showNtripSettingsDialog()
             }
         }
 
@@ -189,6 +236,38 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
     }
 
+    private fun showNtripSettingsDialog() {
+        val prefs = getSharedPreferences("ntrip_prefs", Context.MODE_PRIVATE)
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 40, 50, 10)
+        }
+
+        val hostInput = EditText(this).apply { hint = "Host"; setText(prefs.getString("host", "")) }
+        val portInput = EditText(this).apply { hint = "Port"; setText(prefs.getString("port", "2101")) }
+        val mountInput = EditText(this).apply { hint = "Mountpoint"; setText(prefs.getString("mount", "")) }
+        val userInput = EditText(this).apply { hint = "Username"; setText(prefs.getString("user", "")) }
+        val passInput = EditText(this).apply { hint = "Password"; setText(prefs.getString("pass", "")) }
+
+        layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput)
+
+        AlertDialog.Builder(this)
+            .setTitle("NTRIP Settings")
+            .setView(layout)
+            .setPositiveButton("Connect") { _, _ ->
+                val host = hostInput.text.toString()
+                val port = portInput.text.toString().toIntOrNull() ?: 2101
+                val mount = mountInput.text.toString()
+                val user = userInput.text.toString()
+                val pass = passInput.text.toString()
+
+                prefs.edit().putString("host", host).putString("port", port.toString()).putString("mount", mount).putString("user", user).putString("pass", pass).apply()
+                ntripManager.connect(host, port, mount, user, pass)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_LOCATION && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
@@ -236,6 +315,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 Log.e(TAG, "Thread Connect Error", e)
             }
         }.start()
+    }
+
+    override fun onGgaReceived(sentence: String) {
+        if (isNtripConnected) {
+            ntripManager.sendGga(sentence)
+        }
     }
 
     override fun onLocationUpdate(location: SerialLocation) {
@@ -288,6 +373,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         super.onDestroy()
         try { unregisterReceiver(usbReceiver) } catch (e: Exception) {}
         serialLocationManager.release()
+        ntripManager.release()
         if (::mapView.isInitialized) mapView.onDestroy()
     }
 }

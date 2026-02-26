@@ -31,6 +31,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
     interface LocationListener {
         fun onLocationUpdate(location: SerialLocation)
+        fun onGgaReceived(sentence: String)
         fun onError(message: String)
         fun onConnected()
         fun onDisconnected()
@@ -140,6 +141,16 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
         }
     }
 
+    fun write(data: ByteArray) {
+        executor.submit {
+            try {
+                usbSerialPort?.write(data, 1000)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error writing to serial: ${e.message}")
+            }
+        }
+    }
+
     override fun onNewData(data: ByteArray) {
         try {
             val str = String(data, Charsets.US_ASCII)
@@ -179,6 +190,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
             val type = parts[0]
             if (type.endsWith("GGA") && parts.size >= 10) {
+                mainHandler.post { listener?.onGgaReceived(sentence) }
                 val lat = parseLatitude(parts[2], parts[3])
                 val lon = parseLongitude(parts[4], parts[5])
                 val quality = try { parts[6].toInt() } catch (e: Exception) { 0 }
