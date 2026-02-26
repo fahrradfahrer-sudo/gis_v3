@@ -62,11 +62,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
 
-    private val mapStyles = listOf(
-        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
-        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
-        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
-    )
+    private val mapStyles: List<Pair<String, String>>
+        get() = listOf(
+            "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
+            "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
+            "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
+        )
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -142,7 +143,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 updateStatus("ERROR: No API Key")
                 Toast.makeText(this, "Please set your MapTiler API key in MainActivity.kt", Toast.LENGTH_LONG).show()
             } else {
-                loadStyle(mapStyles[0].second)
+                // Simplest style load, same as working branch
+                map.setStyle(mapStyles[0].second) { style ->
+                    updateStatus("Map Ready")
+                    enableLocationComponent(style)
+                }
             }
         }
 
@@ -182,20 +187,16 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         styleSpinner.adapter = adapter
         styleSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (::map.isInitialized) loadStyle(mapStyles[position].second)
+                if (::map.isInitialized) {
+                    map.setStyle(mapStyles[position].second) { style ->
+                        enableLocationComponent(style)
+                    }
+                }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
         checkLocationPermission()
-    }
-
-    private fun loadStyle(url: String) {
-        updateStatus("Loading style...")
-        map.setStyle(url) { style ->
-            updateStatus("Map Ready")
-            enableLocationComponent(style)
-        }
     }
 
     private fun updateStatus(msg: String) {
@@ -211,16 +212,16 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private fun enableLocationComponent(style: Style) {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             try {
-                map.locationComponent.apply {
+                if (!map.locationComponent.isLocationComponentActivated) {
                     val options = LocationComponentActivationOptions.builder(this@MainActivity, style)
                         .locationEngine(serialLocationEngine)
                         .useDefaultLocationEngine(false)
                         .build()
-                    activateLocationComponent(options)
-                    isLocationComponentEnabled = true
-                    cameraMode = CameraMode.TRACKING
-                    renderMode = RenderMode.COMPASS
+                    map.locationComponent.activateLocationComponent(options)
                 }
+                map.locationComponent.isLocationComponentEnabled = true
+                map.locationComponent.cameraMode = CameraMode.TRACKING
+                map.locationComponent.renderMode = RenderMode.COMPASS
             } catch (e: Exception) {
                 Log.e(TAG, "Location Component error", e)
             }
