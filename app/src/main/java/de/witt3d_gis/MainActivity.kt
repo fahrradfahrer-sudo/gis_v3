@@ -63,27 +63,25 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val PERMISSION_REQUEST_LOCATION = 1001
 
     private val mapStyles = listOf(
+        "MapLibre Demo" to "https://demotiles.maplibre.org/style.json",
         "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
         "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
-        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey",
-        "MapLibre Demo" to "https://demotiles.maplibre.org/style.json" // fallback
+        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
     )
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (ACTION_USB_PERMISSION == intent.action) {
-                synchronized(this) {
-                    val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                    }
-                    if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
-                        device?.let { connectToDevice(it, pendingBaudRate) }
-                    } else {
-                        updateStatus("USB Permission denied")
-                    }
+                val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+                if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                    device?.let { connectToDevice(it, pendingBaudRate) }
+                } else {
+                    updateStatus("USB Permission denied")
                 }
             }
         }
@@ -92,17 +90,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize MapLibre
+        // Initialize MapLibre BEFORE anything else
         MapLibre.getInstance(this)
 
         setContentView(R.layout.activity_main)
 
+        // Find views - ENSURE NO downloadButton REFERENCE HERE
         statusText = findViewById(R.id.statusText)
         mapView = findViewById(R.id.mapView)
         connectSerialButton = findViewById(R.id.connectSerialButton)
         followButton = findViewById(R.id.followButton)
         ntripButton = findViewById(R.id.ntripButton)
 
+        // Initialize managers
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
         serialLocationEngine = SerialLocationEngine()
@@ -110,13 +110,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         ntripManager = NtripManager()
         ntripManager.listener = object : NtripManager.NtripListener {
             override fun onRtcmData(data: ByteArray) {
-                if (isSerialConnected) {
-                    serialLocationManager.write(data)
-                }
+                if (isSerialConnected) serialLocationManager.write(data)
             }
             override fun onError(message: String) {
                 updateStatus("NTRIP Error: $message")
-                runOnUiThread { Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show() }
             }
             override fun onConnected() {
                 isNtripConnected = true
@@ -135,29 +132,18 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             this.map = mapObj
 
             mapView.addOnDidFailLoadingMapListener { error ->
-                Log.e(TAG, "Map Loading Error: $error")
-                updateStatus("Map Error: $error")
+                val masked = if (apiKey.length > 6) "${apiKey.take(3)}...${apiKey.takeLast(3)}" else apiKey
+                Log.e(TAG, "Map Error (Key=$masked): $error")
+                updateStatus("Map Error: $error (Key: $masked)")
             }
 
-            if (apiKey == "YOUR_MAPTILER_API_KEY") {
-                updateStatus("ERROR: No API Key set in MainActivity.kt")
-                Toast.makeText(this, "Please set your MapTiler API key!", Toast.LENGTH_LONG).show()
-                // Try to load a non-key style anyway
-                map.setStyle(Style.Builder().fromUri(mapStyles[0].second))
-            } else {
-                map.setStyle(mapStyles[0].second) { style ->
-                    updateStatus("Map Ready")
-                    enableLocationComponent(style)
-                }
-            }
+            // Always try to load the first style (Demo) to verify engine
+            val initialUrl = mapStyles[0].second
+            loadStyle(initialUrl)
         }
 
         connectSerialButton.setOnClickListener {
-            if (isSerialConnected) {
-                serialLocationManager.disconnect()
-            } else {
-                showDeviceSelectionDialog()
-            }
+            if (isSerialConnected) serialLocationManager.disconnect() else showDeviceSelectionDialog()
         }
 
         followButton.setOnClickListener {
@@ -168,11 +154,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
 
         ntripButton.setOnClickListener {
-            if (isNtripConnected) {
-                ntripManager.disconnect()
-            } else {
-                showNtripSettingsDialog()
-            }
+            if (isNtripConnected) ntripManager.disconnect() else showNtripSettingsDialog()
         }
 
         val filter = IntentFilter(ACTION_USB_PERMISSION)
@@ -189,15 +171,21 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         styleSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (::map.isInitialized) {
-                    map.setStyle(mapStyles[position].second) { style ->
-                        enableLocationComponent(style)
-                    }
+                    loadStyle(mapStyles[position].second)
                 }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
         checkLocationPermission()
+    }
+
+    private fun loadStyle(url: String) {
+        updateStatus("Loading map...")
+        map.setStyle(url) { style ->
+            updateStatus("Map Ready")
+            enableLocationComponent(style)
+        }
     }
 
     private fun updateStatus(msg: String) {
@@ -313,25 +301,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     // --- SerialLocationManager.LocationListener implementation ---
 
     override fun onGgaReceived(sentence: String) {
-        if (isNtripConnected) {
-            ntripManager.sendGga(sentence)
-        }
+        if (isNtripConnected) ntripManager.sendGga(sentence)
     }
 
     override fun onLocationUpdate(location: SerialLocation) {
         updateStatus("Fix: ${String.format("%.6f", location.latitude)}, ${String.format("%.6f", location.longitude)}")
-
         val androidLocation = Location("gps").apply {
             latitude = location.latitude
             longitude = location.longitude
             location.altitude?.let { altitude = it }
             time = location.time
             accuracy = location.accuracy ?: 2.0f
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-                elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
         }
-
         runOnUiThread {
             serialLocationEngine.updateLocation(androidLocation)
             if (isFirstFix && ::map.isInitialized) {
