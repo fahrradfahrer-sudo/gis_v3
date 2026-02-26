@@ -16,8 +16,6 @@ class NtripManager {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var socket: Socket? = null
-    private var inputStream: InputStream? = null
-    private var outputStream: OutputStream? = null
     private var isRunning = false
 
     private var lastHost = ""
@@ -35,16 +33,16 @@ class NtripManager {
 
     var listener: NtripListener? = null
 
+    @Synchronized
     fun connect(host: String, port: Int, mountpoint: String, user: String, pass: String) {
         if (isRunning) {
-            Log.d(TAG, "NTRIP: Already running, disconnecting first...")
+            Log.d(TAG, "NTRIP: Re-connecting...")
             disconnect()
             Thread.sleep(500)
         }
 
         lastHost = host; lastPort = port; lastMount = mountpoint; lastUser = user; lastPass = pass
         isRunning = true
-        Log.i(TAG, "NTRIP: Starting client for $host:$port")
 
         executor.submit {
             runConnectionLoop()
@@ -53,41 +51,40 @@ class NtripManager {
 
     private fun runConnectionLoop() {
         while (isRunning) {
+            var currentSocket: Socket? = null
             try {
-                Log.i(TAG, "NTRIP: Connecting to $lastHost:$lastPort...")
-                socket = Socket()
-                socket?.connect(InetSocketAddress(lastHost, lastPort), 10000)
-                socket?.soTimeout = 15000
+                Log.i(TAG, "NTRIP: Attempting connection to $lastHost:$lastPort")
+                currentSocket = Socket()
+                currentSocket.connect(InetSocketAddress(lastHost, lastPort), 10000)
+                currentSocket.soTimeout = 15000
+                socket = currentSocket
 
-                outputStream = socket?.getOutputStream()
-                inputStream = socket?.getInputStream()
+                val outputStream = currentSocket.getOutputStream()
+                val inputStream = currentSocket.getInputStream()
 
                 val auth = Base64.encodeToString("$lastUser:$lastPass".toByteArray(), Base64.NO_WRAP)
-                // Use HTTP/1.1 with explicit Host and NTRIP headers for VRS casters
-                val request = "GET /$lastMount HTTP/1.1\r\n" +
-                              "Host: $lastHost\r\n" +
-                              "Ntrip-Version: Ntrip/2.0\r\n" +
+                // Use standard NTRIP 1.0 request for widest compatibility
+                val request = "GET /$lastMount HTTP/1.0\r\n" +
                               "User-Agent: NTRIP Witt3D_GIS\r\n" +
                               "Authorization: Basic $auth\r\n" +
                               "Connection: close\r\n" +
                               "\r\n"
 
-                outputStream?.write(request.toByteArray())
-                outputStream?.flush()
+                outputStream.write(request.toByteArray())
+                outputStream.flush()
 
                 val buffer = ByteArray(2048)
-                val bytesRead = inputStream?.read(buffer) ?: 0
+                val bytesRead = inputStream.read(buffer) ?: 0
                 if (bytesRead > 0) {
                     val response = String(buffer, 0, bytesRead)
-                    Log.i(TAG, "NTRIP Server Response: ${response.split("\r\n")[0]}")
+                    Log.i(TAG, "NTRIP Server: ${response.split("\r\n")[0]}")
 
                     if (response.contains("200 OK") || response.contains("ICY 200 OK")) {
-                        Log.i(TAG, "NTRIP: Auth successful, receiving RTCM...")
                         mainHandler.post { listener?.onConnected() }
 
                         val rtcmBuffer = ByteArray(4096)
                         while (isRunning) {
-                            val read = inputStream?.read(rtcmBuffer) ?: -1
+                            val read = inputStream.read(rtcmBuffer) ?: -1
                             if (read == -1) break
                             if (read > 0) {
                                 val data = rtcmBuffer.copyOfRange(0, read)
@@ -95,61 +92,56 @@ class NtripManager {
                             }
                         }
                     } else {
-                        Log.e(TAG, "NTRIP Auth failed: $response")
-                        mainHandler.post { listener?.onError("Auth failed: ${response.take(30)}") }
+                        val msg = response.split("\r\n")[0]
+                        mainHandler.post { listener?.onError("Caster: $msg") }
                         if (response.contains("401") || response.contains("403") || response.contains("404")) {
-                            isRunning = false // Stop loop on fatal auth errors
+                            isRunning = false
                         }
                     }
-                } else {
-                    throw Exception("Empty response from caster")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "NTRIP error: ${e.message}")
-                if (isRunning) mainHandler.post { listener?.onError("NTRIP: ${e.message}") }
-                if (isRunning) Thread.sleep(5000)
+                Log.e(TAG, "NTRIP Exception: ${e.message}")
+                if (isRunning) {
+                    mainHandler.post { listener?.onError("NTRIP: ${e.message}") }
+                    Thread.sleep(5000)
+                }
             } finally {
-                closeInternal()
+                try { currentSocket?.close() } catch (e: Exception) {}
+                if (socket == currentSocket) socket = null
             }
 
             if (isRunning) {
-                Log.i(TAG, "NTRIP: Retrying connection...")
+                Log.i(TAG, "NTRIP: Socket closed, retrying in 2s...")
                 mainHandler.post { listener?.onDisconnected() }
                 Thread.sleep(2000)
             }
         }
-        Log.i(TAG, "NTRIP: Connection loop ended")
+        Log.i(TAG, "NTRIP: Loop terminated")
     }
 
     fun sendGga(gga: String) {
         executor.submit {
             try {
-                val out = outputStream
-                if (isRunning && socket?.isConnected == true && out != null) {
+                val currentSocket = socket
+                if (isRunning && currentSocket?.isConnected == true) {
+                    val out = currentSocket.getOutputStream()
                     val message = if (gga.endsWith("\r\n")) gga else "$gga\r\n"
-                    synchronized(out) {
+                    synchronized(currentSocket) {
                         out.write(message.toByteArray())
                         out.flush()
                     }
-                    Log.v(TAG, "NTRIP: Sent GGA")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "NTRIP: Send GGA failed: ${e.message}")
+                Log.e(TAG, "NTRIP: GGA send failed: ${e.message}")
             }
         }
     }
 
+    @Synchronized
     fun disconnect() {
-        Log.i(TAG, "NTRIP: Disconnecting...")
         isRunning = false
-        executor.submit { closeInternal() }
-    }
-
-    private fun closeInternal() {
-        try { inputStream?.close() } catch (e: Exception) {}
-        try { outputStream?.close() } catch (e: Exception) {}
         try { socket?.close() } catch (e: Exception) {}
-        inputStream = null; outputStream = null; socket = null
+        socket = null
     }
 
     fun release() {

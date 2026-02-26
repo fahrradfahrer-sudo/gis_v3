@@ -55,7 +55,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var ntripManager: NtripManager
 
     private var isSerialConnected = false
-    private var isNtripActive = false
     private var pendingDevice: UsbDevice? = null
     private var isFirstFix = true
 
@@ -104,14 +103,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 if (isSerialConnected) serialLocationManager.write(data)
             }
             override fun onError(message: String) { updateStatus("NTRIP: $message") }
-            override fun onConnected() {
-                updateStatus("NTRIP: Connected")
-                isNtripActive = true
-            }
-            override fun onDisconnected() {
-                updateStatus("NTRIP: Disconnected")
-                isNtripActive = false
-            }
+            override fun onConnected() { updateStatus("NTRIP: Connected") }
+            override fun onDisconnected() { updateStatus("NTRIP: Disconnected") }
         }
 
         mapView.onCreate(savedInstanceState)
@@ -273,9 +266,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     override fun onGgaReceived(sentence: String) {
-        if (isNtripActive) {
-            ntripManager.sendGga(sentence)
-        }
+        ntripManager.sendGga(sentence)
     }
 
     override fun onLocationUpdate(location: SerialLocation) {
@@ -328,7 +319,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onDisconnected() {
         isSerialConnected = false
-        isNtripActive = false
         runOnUiThread { connectSerialButton.text = "Connect" }
         updateStatus("Disconnected")
     }
