@@ -26,7 +26,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import org.maplibre.android.MapLibre
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.location.LocationComponentActivationOptions
+import org.maplibre.android.location.modes.CameraMode
+import org.maplibre.android.location.modes.RenderMode
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
@@ -35,26 +39,30 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val TAG = "MainActivity"
 
     // --- IMPORTANT: ENTER YOUR MAPTILER API KEY HERE ---
-    private val MAPTILER_API_KEY = "YOUR_MAPTILER_API_KEY"
+    // You can also set it in app/src/main/res/values/strings.xml (maptiler_api_key)
+    private var MAPTILER_API_KEY = "YOUR_MAPTILER_API_KEY"
 
     private lateinit var mapView: MapView
     private lateinit var map: MapLibreMap
     private lateinit var statusText: TextView
     private lateinit var connectSerialButton: Button
+    private lateinit var followButton: Button
 
     private lateinit var serialLocationManager: SerialLocationManager
     private lateinit var serialLocationEngine: SerialLocationEngine
     private var isSerialConnected = false
     private var pendingBaudRate: Int = 9600
+    private var isFirstFix = true
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
 
-    private val mapStyles = listOf(
-        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$MAPTILER_API_KEY",
-        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$MAPTILER_API_KEY",
-        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$MAPTILER_API_KEY"
-    )
+    private val mapStyles: List<Pair<String, String>>
+        get() = listOf(
+            "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$MAPTILER_API_KEY",
+            "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$MAPTILER_API_KEY",
+            "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$MAPTILER_API_KEY"
+        )
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -91,10 +99,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         statusText = findViewById(R.id.statusText)
         mapView = findViewById(R.id.mapView)
         connectSerialButton = findViewById(R.id.connectSerialButton)
+        followButton = findViewById(R.id.followButton)
 
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
         serialLocationEngine = SerialLocationEngine()
+
+        // Use key from strings.xml if provided and the constant is still placeholder
+        if (MAPTILER_API_KEY == "YOUR_MAPTILER_API_KEY") {
+            val resKey = getString(R.string.maptiler_api_key)
+            if (resKey != "YOUR_MAPTILER_API_KEY") {
+                MAPTILER_API_KEY = resKey
+            }
+        }
 
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { mapObj ->
@@ -116,6 +133,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 serialLocationManager.disconnect()
             } else {
                 showDeviceSelectionDialog()
+            }
+        }
+
+        followButton.setOnClickListener {
+            if (::map.isInitialized && map.locationComponent.isLocationComponentActivated) {
+                map.locationComponent.cameraMode = CameraMode.TRACKING
+                Toast.makeText(this, "Following location", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -174,6 +198,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         .build()
                     activateLocationComponent(options)
                     isLocationComponentEnabled = true
+                    cameraMode = CameraMode.TRACKING
+                    renderMode = RenderMode.COMPASS
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Location Component error", e)
@@ -232,6 +258,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onLocationUpdate(location: SerialLocation) {
         updateStatus("Fix: ${String.format("%.6f", location.latitude)}, ${String.format("%.6f", location.longitude)}")
+
         val androidLocation = Location("gps").apply {
             latitude = location.latitude
             longitude = location.longitude
@@ -242,7 +269,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
             }
         }
-        serialLocationEngine.updateLocation(androidLocation)
+
+        runOnUiThread {
+            serialLocationEngine.updateLocation(androidLocation)
+            if (isFirstFix && ::map.isInitialized) {
+                map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(location.latitude, location.longitude), 15.0))
+                isFirstFix = false
+            }
+        }
     }
 
     override fun onError(msg: String) {
