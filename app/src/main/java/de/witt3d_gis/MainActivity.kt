@@ -192,7 +192,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(50, 40, 50, 10)
+            setPadding(60, 40, 60, 10)
         }
 
         val baudInput = EditText(this).apply { hint = "Baudrate"; setText(prefs.getString("baud", "115200")) }
@@ -209,12 +209,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             .setView(layout)
             .setPositiveButton("Save & Start NTRIP") { _, _ ->
                 prefs.edit()
-                    .putString("baud", baudInput.text.toString())
-                    .putString("host", hostInput.text.toString())
-                    .putString("port", portInput.text.toString())
-                    .putString("mount", mountInput.text.toString())
-                    .putString("user", userInput.text.toString())
-                    .putString("pass", passInput.text.toString())
+                    .putString("baud", baudInput.text.toString().trim())
+                    .putString("host", hostInput.text.toString().trim())
+                    .putString("port", portInput.text.toString().trim())
+                    .putString("mount", mountInput.text.toString().trim())
+                    .putString("user", userInput.text.toString().trim())
+                    .putString("pass", passInput.text.toString().trim())
                     .apply()
 
                 if (isSerialConnected) {
@@ -311,7 +311,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val user = prefs.getString("user", "") ?: ""
             val pass = prefs.getString("pass", "") ?: ""
             runOnUiThread {
-                updateStatus("NTRIP: Starting...")
+                updateStatus("NTRIP: Connecting...")
                 ntripManager.connect(host, port, mount, user, pass)
             }
         }

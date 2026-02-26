@@ -41,7 +41,7 @@ class NtripManager {
             Thread.sleep(500)
         }
 
-        lastHost = host; lastPort = port; lastMount = mountpoint; lastUser = user; lastPass = pass
+        lastHost = host.trim(); lastPort = port; lastMount = mountpoint.trim(); lastUser = user.trim(); lastPass = pass.trim()
         isRunning = true
 
         executor.submit {
@@ -53,7 +53,7 @@ class NtripManager {
         while (isRunning) {
             var currentSocket: Socket? = null
             try {
-                Log.i(TAG, "NTRIP: Attempting connection to $lastHost:$lastPort")
+                Log.i(TAG, "NTRIP: Connecting to $lastHost:$lastPort...")
                 currentSocket = Socket()
                 currentSocket.connect(InetSocketAddress(lastHost, lastPort), 10000)
                 currentSocket.soTimeout = 15000
@@ -63,8 +63,10 @@ class NtripManager {
                 val inputStream = currentSocket.getInputStream()
 
                 val auth = Base64.encodeToString("$lastUser:$lastPass".toByteArray(), Base64.NO_WRAP)
-                // Use standard NTRIP 1.0 request for widest compatibility
+                // Use a hybrid request format: HTTP/1.0 but with Host header for modern proxy support
                 val request = "GET /$lastMount HTTP/1.0\r\n" +
+                              "Host: $lastHost\r\n" +
+                              "Ntrip-Version: Ntrip/2.0\r\n" +
                               "User-Agent: NTRIP Witt3D_GIS\r\n" +
                               "Authorization: Basic $auth\r\n" +
                               "Connection: close\r\n" +
@@ -73,28 +75,44 @@ class NtripManager {
                 outputStream.write(request.toByteArray())
                 outputStream.flush()
 
-                val buffer = ByteArray(2048)
-                val bytesRead = inputStream.read(buffer) ?: 0
+                // Read response carefully
+                val buffer = ByteArray(4096)
+                var bytesRead = inputStream.read(buffer)
                 if (bytesRead > 0) {
-                    val response = String(buffer, 0, bytesRead)
-                    Log.i(TAG, "NTRIP Server: ${response.split("\r\n")[0]}")
+                    val responseHeader = String(buffer, 0, bytesRead)
+                    Log.i(TAG, "NTRIP Server Header: ${responseHeader.split("\r\n")[0]}")
 
-                    if (response.contains("200 OK") || response.contains("ICY 200 OK")) {
+                    if (responseHeader.contains("200 OK") || responseHeader.contains("ICY 200 OK")) {
+                        Log.i(TAG, "NTRIP: Authentication successful")
                         mainHandler.post { listener?.onConnected() }
 
+                        // Handle cases where some binary data was already read into the buffer
+                        val headerEnd = responseHeader.indexOf("\r\n\r\n")
+                        if (headerEnd != -1) {
+                            val binaryStart = headerEnd + 4
+                            if (binaryStart < bytesRead) {
+                                val initialData = buffer.copyOfRange(binaryStart, bytesRead)
+                                mainHandler.post { listener?.onRtcmData(initialData) }
+                            }
+                        }
+
+                        // Continuous read loop
                         val rtcmBuffer = ByteArray(4096)
                         while (isRunning) {
-                            val read = inputStream.read(rtcmBuffer) ?: -1
-                            if (read == -1) break
-                            if (read > 0) {
-                                val data = rtcmBuffer.copyOfRange(0, read)
+                            bytesRead = inputStream.read(rtcmBuffer)
+                            if (bytesRead == -1) break
+                            if (bytesRead > 0) {
+                                val data = rtcmBuffer.copyOfRange(0, bytesRead)
                                 mainHandler.post { listener?.onRtcmData(data) }
                             }
                         }
                     } else {
-                        val msg = response.split("\r\n")[0]
-                        mainHandler.post { listener?.onError("Caster: $msg") }
-                        if (response.contains("401") || response.contains("403") || response.contains("404")) {
+                        val errorLine = responseHeader.split("\r\n")[0]
+                        Log.e(TAG, "NTRIP Error response: $responseHeader")
+                        mainHandler.post { listener?.onError("Caster: $errorLine") }
+
+                        // Fatal auth errors - don't retry immediately
+                        if (responseHeader.contains("401") || responseHeader.contains("403")) {
                             isRunning = false
                         }
                     }
@@ -116,7 +134,7 @@ class NtripManager {
                 Thread.sleep(2000)
             }
         }
-        Log.i(TAG, "NTRIP: Loop terminated")
+        Log.i(TAG, "NTRIP: Connection loop ended")
     }
 
     fun sendGga(gga: String) {
