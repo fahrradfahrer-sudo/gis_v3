@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var ntripManager: NtripManager
 
     private var isSerialConnected = false
-    private var isNtripRunning = false
+    private var isNtripActive = false
     private var pendingDevice: UsbDevice? = null
     private var isFirstFix = true
 
@@ -103,14 +103,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             override fun onRtcmData(data: ByteArray) {
                 if (isSerialConnected) serialLocationManager.write(data)
             }
-            override fun onError(message: String) { updateStatus("NTRIP Error: $message") }
+            override fun onError(message: String) { updateStatus("NTRIP: $message") }
             override fun onConnected() {
-                isNtripRunning = true
-                updateStatus("NTRIP Connected")
+                updateStatus("NTRIP: Connected")
+                isNtripActive = true
             }
             override fun onDisconnected() {
-                isNtripRunning = false
-                updateStatus("NTRIP Disconnected")
+                updateStatus("NTRIP: Disconnected")
+                isNtripActive = false
             }
         }
 
@@ -214,7 +214,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         AlertDialog.Builder(this)
             .setTitle("Settings")
             .setView(layout)
-            .setPositiveButton("Save") { _, _ ->
+            .setPositiveButton("Save & Start NTRIP") { _, _ ->
                 prefs.edit()
                     .putString("baud", baudInput.text.toString())
                     .putString("host", hostInput.text.toString())
@@ -223,9 +223,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     .putString("user", userInput.text.toString())
                     .putString("pass", passInput.text.toString())
                     .apply()
-                Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show()
+
+                if (isSerialConnected) {
+                    startNtripFromPrefs()
+                } else {
+                    Toast.makeText(this, "Settings saved. Connect serial to start NTRIP.", Toast.LENGTH_SHORT).show()
+                }
             }
             .setNegativeButton("Cancel", null)
+            .setNeutralButton("Stop NTRIP") { _, _ ->
+                ntripManager.disconnect()
+            }
             .show()
     }
 
@@ -265,7 +273,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     override fun onGgaReceived(sentence: String) {
-        if (isNtripRunning) {
+        if (isNtripActive) {
             ntripManager.sendGga(sentence)
         }
     }
@@ -300,8 +308,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         isSerialConnected = true
         runOnUiThread { connectSerialButton.text = "Disconnect" }
         updateStatus("Serial Connected")
+        startNtripFromPrefs()
+    }
 
-        // Auto-start NTRIP
+    private fun startNtripFromPrefs() {
         val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
         val host = prefs.getString("host", "") ?: ""
         if (host.isNotEmpty()) {
@@ -310,16 +320,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val user = prefs.getString("user", "") ?: ""
             val pass = prefs.getString("pass", "") ?: ""
             runOnUiThread {
-                updateStatus("Starting NTRIP...")
+                updateStatus("NTRIP: Starting...")
                 ntripManager.connect(host, port, mount, user, pass)
-                isNtripRunning = true
             }
         }
     }
 
     override fun onDisconnected() {
         isSerialConnected = false
-        isNtripRunning = false
+        isNtripActive = false
         runOnUiThread { connectSerialButton.text = "Connect" }
         updateStatus("Disconnected")
     }
