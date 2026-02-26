@@ -39,24 +39,24 @@ import org.maplibre.android.maps.Style
 
 class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener {
     private val TAG = "MainActivity"
-
-    // --- IMPORTANT: ENTER YOUR MAPTILER API KEY HERE ---
     private val apiKey = "YOUR_MAPTILER_API_KEY"
 
     private lateinit var mapView: MapView
     private lateinit var map: MapLibreMap
     private lateinit var statusText: TextView
+    private lateinit var fixStatusText: TextView
+    private lateinit var satCountText: TextView
     private lateinit var connectSerialButton: Button
     private lateinit var followButton: Button
-    private lateinit var ntripButton: Button
+    private lateinit var settingsButton: Button
 
     private lateinit var serialLocationManager: SerialLocationManager
     private lateinit var serialLocationEngine: SerialLocationEngine
     private lateinit var ntripManager: NtripManager
 
     private var isSerialConnected = false
-    private var isNtripConnected = false
-    private var pendingBaudRate: Int = 9600
+    private var isNtripRunning = false
+    private var pendingDevice: UsbDevice? = null
     private var isFirstFix = true
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
@@ -72,14 +72,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (ACTION_USB_PERMISSION == intent.action) {
-                val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                }
                 if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
-                    device?.let { connectToDevice(it, pendingBaudRate) }
+                    pendingDevice?.let { connectToSerial(it) }
                 } else {
                     updateStatus("USB Permission denied")
                 }
@@ -93,10 +87,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         setContentView(R.layout.activity_main)
 
         statusText = findViewById(R.id.statusText)
+        fixStatusText = findViewById(R.id.fixStatusText)
+        satCountText = findViewById(R.id.satCountText)
         mapView = findViewById(R.id.mapView)
         connectSerialButton = findViewById(R.id.connectSerialButton)
         followButton = findViewById(R.id.followButton)
-        ntripButton = findViewById(R.id.ntripButton)
+        settingsButton = findViewById(R.id.settingsButton)
 
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
@@ -107,20 +103,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             override fun onRtcmData(data: ByteArray) {
                 if (isSerialConnected) serialLocationManager.write(data)
             }
-            override fun onError(message: String) {
-                updateStatus("NTRIP Error: $message")
-                Log.e(TAG, "NTRIP Error reported: $message")
-            }
+            override fun onError(message: String) { updateStatus("NTRIP Error: $message") }
             override fun onConnected() {
-                isNtripConnected = true
-                Log.i(TAG, "NTRIP Connected callback")
-                runOnUiThread { ntripButton.text = "NTRIP Stop" }
+                isNtripRunning = true
                 updateStatus("NTRIP Connected")
             }
             override fun onDisconnected() {
-                isNtripConnected = false
-                Log.i(TAG, "NTRIP Disconnected callback")
-                runOnUiThread { ntripButton.text = "NTRIP" }
+                isNtripRunning = false
                 updateStatus("NTRIP Disconnected")
             }
         }
@@ -128,14 +117,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { mapObj ->
             this.map = mapObj
-            mapView.addOnDidFailLoadingMapListener { error ->
-                updateStatus("Map Error: $error")
-            }
+            mapView.addOnDidFailLoadingMapListener { error -> updateStatus("Map Error: $error") }
             loadStyle(mapStyles[0].second)
         }
 
         connectSerialButton.setOnClickListener {
-            if (isSerialConnected) serialLocationManager.disconnect() else showDeviceSelectionDialog()
+            if (isSerialConnected) {
+                serialLocationManager.disconnect()
+                ntripManager.disconnect()
+            } else {
+                showDeviceSelectionDialog()
+            }
         }
 
         followButton.setOnClickListener {
@@ -145,9 +137,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
         }
 
-        ntripButton.setOnClickListener {
-            if (isNtripConnected) ntripManager.disconnect() else showNtripSettingsDialog()
-        }
+        settingsButton.setOnClickListener { showSettingsDialog() }
 
         val filter = IntentFilter(ACTION_USB_PERMISSION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -201,113 +191,98 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 map.locationComponent.isLocationComponentEnabled = true
                 map.locationComponent.cameraMode = CameraMode.TRACKING
                 map.locationComponent.renderMode = RenderMode.COMPASS
-            } catch (e: Exception) {
-                Log.e(TAG, "Location Component error", e)
-            }
+            } catch (e: Exception) { Log.e(TAG, "LocComp error: ${e.message}") }
         }
     }
 
-    private fun showNtripSettingsDialog() {
-        val prefs = getSharedPreferences("ntrip_prefs", Context.MODE_PRIVATE)
+    private fun showSettingsDialog() {
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(50, 40, 50, 10)
         }
 
-        val hostInput = EditText(this).apply { hint = "Host"; setText(prefs.getString("host", "")) }
-        val portInput = EditText(this).apply { hint = "Port"; setText(prefs.getString("port", "2101")) }
-        val mountInput = EditText(this).apply { hint = "Mountpoint"; setText(prefs.getString("mount", "")) }
-        val userInput = EditText(this).apply { hint = "Username"; setText(prefs.getString("user", "")) }
-        val passInput = EditText(this).apply { hint = "Password"; setText(prefs.getString("pass", "")) }
+        val baudInput = EditText(this).apply { hint = "Baudrate"; setText(prefs.getString("baud", "115200")) }
+        val hostInput = EditText(this).apply { hint = "NTRIP Host"; setText(prefs.getString("host", "")) }
+        val portInput = EditText(this).apply { hint = "NTRIP Port"; setText(prefs.getString("port", "2101")) }
+        val mountInput = EditText(this).apply { hint = "NTRIP Mount"; setText(prefs.getString("mount", "")) }
+        val userInput = EditText(this).apply { hint = "NTRIP User"; setText(prefs.getString("user", "")) }
+        val passInput = EditText(this).apply { hint = "NTRIP Pass"; setText(prefs.getString("pass", "")) }
 
-        layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput)
+        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput)
 
         AlertDialog.Builder(this)
-            .setTitle("NTRIP Settings")
+            .setTitle("Settings")
             .setView(layout)
-            .setPositiveButton("Connect") { _, _ ->
-                val host = hostInput.text.toString()
-                val port = portInput.text.toString().toIntOrNull() ?: 2101
-                val mount = mountInput.text.toString()
-                val user = userInput.text.toString()
-                val pass = passInput.text.toString()
-
-                prefs.edit().putString("host", host).putString("port", port.toString()).putString("mount", mount).putString("user", user).putString("pass", pass).apply()
-                ntripManager.connect(host, port, mount, user, pass)
+            .setPositiveButton("Save") { _, _ ->
+                prefs.edit()
+                    .putString("baud", baudInput.text.toString())
+                    .putString("host", hostInput.text.toString())
+                    .putString("port", portInput.text.toString())
+                    .putString("mount", mountInput.text.toString())
+                    .putString("user", userInput.text.toString())
+                    .putString("pass", passInput.text.toString())
+                    .apply()
+                Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_REQUEST_LOCATION && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            if (::map.isInitialized && map.style != null) enableLocationComponent(map.style!!)
-        }
-    }
-
     private fun showDeviceSelectionDialog() {
         val devices = serialLocationManager.getAvailableDevices()
         if (devices.isEmpty()) {
-            Toast.makeText(this, "No USB serial devices found", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No USB devices found", Toast.LENGTH_SHORT).show()
             return
         }
-        val deviceNames = devices.map { "${it.manufacturerName ?: "Unknown"} ${it.productName ?: "Serial Device"}" }.toTypedArray()
+        val names = devices.map { "${it.manufacturerName ?: ""} ${it.productName ?: "Serial"}" }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Select Device")
-            .setItems(deviceNames) { _, which -> showBaudRateSelectionDialog(devices[which]) }
-            .show()
-    }
-
-    private fun showBaudRateSelectionDialog(device: UsbDevice) {
-        val baudRates = arrayOf("4800", "9600", "19200", "38400", "57600", "115200")
-        AlertDialog.Builder(this)
-            .setTitle("Select Baud Rate")
-            .setItems(baudRates) { _, which ->
-                pendingBaudRate = baudRates[which].toInt()
+            .setItems(names) { _, i ->
+                val device = devices[i]
                 val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
                 if (usbManager.hasPermission(device)) {
-                    connectToDevice(device, pendingBaudRate)
+                    connectToSerial(device)
                 } else {
+                    pendingDevice = device
                     val intent = Intent(ACTION_USB_PERMISSION).apply { setPackage(packageName) }
-                    val permissionIntent = PendingIntent.getBroadcast(this, 0, intent, if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0))
-                    usbManager.requestPermission(device, permissionIntent)
+                    val pi = PendingIntent.getBroadcast(this, 0, intent, PendingIntent.FLAG_MUTABLE)
+                    usbManager.requestPermission(device, pi)
                 }
             }
             .show()
     }
 
-    private fun connectToDevice(device: UsbDevice, baudRate: Int) {
+    private fun connectToSerial(device: UsbDevice) {
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val baud = prefs.getString("baud", "115200")?.toIntOrNull() ?: 115200
         updateStatus("Connecting...")
         Thread {
             try {
-                serialLocationManager.connect(device, baudRate)
-            } catch (e: Exception) {
-                Log.e(TAG, "Thread Connect Error", e)
-            }
+                serialLocationManager.connect(device, baud)
+            } catch (e: Exception) { Log.e(TAG, "Connect error: ${e.message}") }
         }.start()
     }
 
-    // --- SerialLocationManager.LocationListener implementation ---
-
     override fun onGgaReceived(sentence: String) {
-        if (isNtripConnected) {
-            Log.v(TAG, "NTRIP: Forwarding GGA to caster")
+        if (isNtripRunning) {
             ntripManager.sendGga(sentence)
         }
     }
 
     override fun onLocationUpdate(location: SerialLocation) {
-        updateStatus("Fix: ${String.format("%.6f", location.latitude)}, ${String.format("%.6f", location.longitude)}")
-        val androidLocation = Location("gps").apply {
-            latitude = location.latitude
-            longitude = location.longitude
-            location.altitude?.let { altitude = it }
-            time = location.time
-            accuracy = location.accuracy ?: 2.0f
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-        }
         runOnUiThread {
+            fixStatusText.text = location.fixType ?: "No Fix"
+            satCountText.text = "Sats: ${location.satellites ?: 0}"
+
+            val androidLocation = Location("gps").apply {
+                latitude = location.latitude
+                longitude = location.longitude
+                location.altitude?.let { altitude = it }
+                time = location.time
+                accuracy = location.accuracy ?: 2.0f
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+            }
             serialLocationEngine.updateLocation(androidLocation)
             if (isFirstFix && ::map.isInitialized) {
                 map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(location.latitude, location.longitude), 15.0))
@@ -325,15 +300,29 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         isSerialConnected = true
         runOnUiThread { connectSerialButton.text = "Disconnect" }
         updateStatus("Serial Connected")
+
+        // Auto-start NTRIP
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val host = prefs.getString("host", "") ?: ""
+        if (host.isNotEmpty()) {
+            val port = prefs.getString("port", "2101")?.toIntOrNull() ?: 2101
+            val mount = prefs.getString("mount", "") ?: ""
+            val user = prefs.getString("user", "") ?: ""
+            val pass = prefs.getString("pass", "") ?: ""
+            runOnUiThread {
+                updateStatus("Starting NTRIP...")
+                ntripManager.connect(host, port, mount, user, pass)
+                isNtripRunning = true
+            }
+        }
     }
 
     override fun onDisconnected() {
         isSerialConnected = false
+        isNtripRunning = false
         runOnUiThread { connectSerialButton.text = "Connect" }
-        updateStatus("Serial Disconnected")
+        updateStatus("Disconnected")
     }
-
-    // --- Lifecycle methods ---
 
     override fun onStart() { super.onStart(); if (::mapView.isInitialized) mapView.onStart() }
     override fun onResume() { super.onResume(); if (::mapView.isInitialized) mapView.onResume() }

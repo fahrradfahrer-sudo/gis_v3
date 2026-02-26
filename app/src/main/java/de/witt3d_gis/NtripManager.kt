@@ -11,7 +11,6 @@ import java.util.concurrent.Executors
 
 class NtripManager {
     private val TAG = "NtripManager"
-    // Use cached thread pool to allow concurrent reading and writing
     private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -19,6 +18,12 @@ class NtripManager {
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
     private var isRunning = false
+
+    private var lastHost = ""
+    private var lastPort = 2101
+    private var lastMount = ""
+    private var lastUser = ""
+    private var lastPass = ""
 
     interface NtripListener {
         fun onRtcmData(data: ByteArray)
@@ -33,18 +38,25 @@ class NtripManager {
         if (isRunning) return
         isRunning = true
 
+        lastHost = host; lastPort = port; lastMount = mountpoint; lastUser = user; lastPass = pass
+
         executor.submit {
+            runConnectionLoop()
+        }
+    }
+
+    private fun runConnectionLoop() {
+        while (isRunning) {
             try {
-                Log.i(TAG, "Connecting to NTRIP caster $host:$port...")
-                socket = Socket(host, port)
-                socket?.soTimeout = 15000
+                Log.i(TAG, "NTRIP: Connecting to $lastHost:$lastPort...")
+                socket = Socket(lastHost, lastPort)
+                socket?.soTimeout = 20000
 
                 outputStream = socket?.getOutputStream()
                 inputStream = socket?.getInputStream()
 
-                val auth = Base64.encodeToString("$user:$pass".toByteArray(), Base64.NO_WRAP)
-                // Use HTTP/1.0 for better compatibility
-                val request = "GET /$mountpoint HTTP/1.0\r\n" +
+                val auth = Base64.encodeToString("$lastUser:$lastPass".toByteArray(), Base64.NO_WRAP)
+                val request = "GET /$lastMount HTTP/1.0\r\n" +
                               "User-Agent: NTRIP Witt3D_GIS\r\n" +
                               "Authorization: Basic $auth\r\n" +
                               "Connection: close\r\n" +
@@ -55,34 +67,35 @@ class NtripManager {
 
                 val buffer = ByteArray(1024)
                 val bytesRead = inputStream?.read(buffer) ?: 0
-                if (bytesRead <= 0) throw Exception("No response from caster")
+                if (bytesRead > 0) {
+                    val response = String(buffer, 0, bytesRead)
+                    if (response.contains("200 OK") || response.contains("ICY 200 OK")) {
+                        Log.i(TAG, "NTRIP: Connected successfully")
+                        mainHandler.post { listener?.onConnected() }
 
-                val response = String(buffer, 0, bytesRead)
-                Log.i(TAG, "NTRIP Response: ${response.split("\r\n")[0]}")
-
-                if (response.contains("ICY 200 OK") || response.contains("200 OK")) {
-                    mainHandler.post { listener?.onConnected() }
-
-                    val rtcmBuffer = ByteArray(4096)
-                    var totalReceived = 0L
-                    while (isRunning) {
-                        val read = inputStream?.read(rtcmBuffer) ?: -1
-                        if (read == -1) break
-                        if (read > 0) {
-                            totalReceived += read
-                            val data = rtcmBuffer.copyOfRange(0, read)
-                            mainHandler.post { listener?.onRtcmData(data) }
-                            if (totalReceived % 10240 == 0L) Log.d(TAG, "Received ${totalReceived/1024} KB RTCM")
+                        val rtcmBuffer = ByteArray(4096)
+                        while (isRunning) {
+                            val read = inputStream?.read(rtcmBuffer) ?: -1
+                            if (read == -1) break
+                            if (read > 0) {
+                                val data = rtcmBuffer.copyOfRange(0, read)
+                                mainHandler.post { listener?.onRtcmData(data) }
+                            }
                         }
+                    } else {
+                        mainHandler.post { listener?.onError("Caster: ${response.split("\r\n")[0]}") }
                     }
-                } else {
-                    mainHandler.post { listener?.onError("Caster error: ${response.split("\r\n")[0]}") }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "NTRIP error: ${e.message}")
-                mainHandler.post { listener?.onError("NTRIP Socket Error: ${e.message}") }
+                Log.e(TAG, "NTRIP loop error: ${e.message}")
+                if (isRunning) Thread.sleep(5000) // retry delay
             } finally {
-                disconnectInternal()
+                closeInternal()
+            }
+            if (isRunning) {
+                Log.i(TAG, "NTRIP: Disconnected, retrying...")
+                mainHandler.post { listener?.onDisconnected() }
+                Thread.sleep(2000)
             }
         }
     }
@@ -97,30 +110,21 @@ class NtripManager {
                         out.write(message.toByteArray())
                         out.flush()
                     }
-                    Log.v(TAG, "NTRIP: Sent GGA (${message.length} bytes)")
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending GGA: ${e.message}")
-            }
+            } catch (e: Exception) {}
         }
     }
 
     fun disconnect() {
         isRunning = false
-        executor.submit { disconnectInternal() }
+        executor.submit { closeInternal() }
     }
 
-    private fun disconnectInternal() {
-        try {
-            inputStream?.close()
-            outputStream?.close()
-            socket?.close()
-        } catch (e: Exception) {}
-        socket = null
-        inputStream = null
-        outputStream = null
-        isRunning = false
-        mainHandler.post { listener?.onDisconnected() }
+    private fun closeInternal() {
+        try { inputStream?.close() } catch (e: Exception) {}
+        try { outputStream?.close() } catch (e: Exception) {}
+        try { socket?.close() } catch (e: Exception) {}
+        inputStream = null; outputStream = null; socket = null
     }
 
     fun release() {
