@@ -41,7 +41,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val TAG = "MainActivity"
 
     // --- IMPORTANT: ENTER YOUR MAPTILER API KEY HERE ---
-    private var apiKey = "YOUR_MAPTILER_API_KEY"
+    private val apiKey = "YOUR_MAPTILER_API_KEY"
 
     private lateinit var mapView: MapView
     private lateinit var map: MapLibreMap
@@ -62,12 +62,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
 
-    private val mapStyles: List<Pair<String, String>>
-        get() = listOf(
-            "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
-            "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
-            "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
-        )
+    private val mapStyles = listOf(
+        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
+        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
+        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey"
+    )
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -92,7 +91,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize MapLibre BEFORE anything else
+        // Initialize MapLibre
         MapLibre.getInstance(this)
 
         setContentView(R.layout.activity_main)
@@ -127,14 +126,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 isNtripConnected = false
                 runOnUiThread { ntripButton.text = "NTRIP" }
                 updateStatus("NTRIP Disconnected")
-            }
-        }
-
-        // Robust API key detection: check constant AND strings.xml
-        if (apiKey == "YOUR_MAPTILER_API_KEY") {
-            val resKey = getString(R.string.maptiler_api_key)
-            if (resKey != "YOUR_MAPTILER_API_KEY") {
-                apiKey = resKey
             }
         }
 
@@ -317,6 +308,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }.start()
     }
 
+    // --- SerialLocationManager.LocationListener implementation ---
+
     override fun onGgaReceived(sentence: String) {
         if (isNtripConnected) {
             ntripManager.sendGga(sentence)
@@ -346,9 +339,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
     }
 
-    override fun onError(msg: String) {
+    override fun onError(message: String) {
         updateStatus("Serial Error")
-        runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
+        runOnUiThread { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
     }
 
     override fun onConnected() {
@@ -362,6 +355,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         runOnUiThread { connectSerialButton.text = "Connect" }
         updateStatus("Serial Disconnected")
     }
+
+    // --- Lifecycle methods ---
 
     override fun onStart() { super.onStart(); if (::mapView.isInitialized) mapView.onStart() }
     override fun onResume() { super.onResume(); if (::mapView.isInitialized) mapView.onResume() }

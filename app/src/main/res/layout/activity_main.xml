@@ -61,7 +61,7 @@
         android:layout_height="wrap_content"
         android:background="#A0FFFFFF"
         android:padding="8dp"
-        android:layout_marginBottom="64dp"
+        android:layout_marginBottom="80dp"
         android:text="Status: Initializing"
         android:textColor="@android:color/black"
         android:textSize="16sp"

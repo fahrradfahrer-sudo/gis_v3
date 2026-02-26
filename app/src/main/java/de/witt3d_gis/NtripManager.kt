@@ -36,7 +36,7 @@ class NtripManager {
             try {
                 Log.d(TAG, "Connecting to NTRIP caster $host:$port...")
                 socket = Socket(host, port)
-                socket?.soTimeout = 10000 // 10s timeout
+                socket?.soTimeout = 15000 // 15s timeout
 
                 outputStream = socket?.getOutputStream()
                 inputStream = socket?.getInputStream()
@@ -50,23 +50,32 @@ class NtripManager {
                               "Ntrip-Version: Ntrip/2.0\r\n" +
                               "\r\n"
 
+                Log.d(TAG, "Sending NTRIP request: GET /$mountpoint")
                 outputStream?.write(request.toByteArray())
                 outputStream?.flush()
 
                 // Read HTTP response header
                 val buffer = ByteArray(1024)
                 val bytesRead = inputStream?.read(buffer) ?: 0
+                if (bytesRead <= 0) {
+                    throw Exception("No response from caster")
+                }
+
                 val response = String(buffer, 0, bytesRead)
+                Log.d(TAG, "NTRIP Response: ${response.split("\r\n")[0]}")
 
                 if (response.contains("ICY 200 OK") || response.contains("HTTP/1.0 200 OK") || response.contains("HTTP/1.1 200 OK")) {
                     Log.d(TAG, "NTRIP Connected successfully")
                     mainHandler.post { listener?.onConnected() }
 
                     // Start reading RTCM stream
-                    val rtcmBuffer = ByteArray(2048)
+                    val rtcmBuffer = ByteArray(4096)
                     while (isRunning) {
                         val read = inputStream?.read(rtcmBuffer) ?: -1
-                        if (read == -1) break
+                        if (read == -1) {
+                            Log.d(TAG, "NTRIP Stream closed by server")
+                            break
+                        }
                         if (read > 0) {
                             val data = rtcmBuffer.copyOfRange(0, read)
                             mainHandler.post { listener?.onRtcmData(data) }
@@ -89,11 +98,10 @@ class NtripManager {
     fun sendGga(gga: String) {
         executor.submit {
             try {
-                if (socket?.isConnected == true && outputStream != null) {
+                if (isRunning && socket?.isConnected == true && outputStream != null) {
                     val message = if (gga.endsWith("\r\n")) gga else "$gga\r\n"
                     outputStream?.write(message.toByteArray())
                     outputStream?.flush()
-                    Log.v(TAG, "Sent GGA to caster: ${message.trim()}")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending GGA to NTRIP: ${e.message}")
