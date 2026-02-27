@@ -57,12 +57,15 @@ class NtripManager {
             try {
                 Log.i(TAG, "NTRIP: Resolving $lastHost...")
                 val addresses = InetAddress.getAllByName(lastHost)
-                val targetAddr = addresses[0]
+                // Filter for IPv4 to avoid issues with casters that don't support IPv6
+                val targetAddr = addresses.firstOrNull { it is java.net.Inet4Address } ?: addresses[0]
+
                 Log.i(TAG, "NTRIP: Resolved to ${targetAddr.hostAddress}. Connecting to port $lastPort...")
+                mainHandler.post { listener?.onError("NTRIP: Connecting to ${targetAddr.hostAddress}...") }
 
                 currentSocket = Socket()
                 currentSocket.connect(InetSocketAddress(targetAddr, lastPort), 10000)
-                currentSocket.soTimeout = 20000
+                currentSocket.soTimeout = 30000
                 socket = currentSocket
 
                 val outputStream = currentSocket.getOutputStream()
@@ -71,8 +74,10 @@ class NtripManager {
                 val auth = Base64.encodeToString("$lastUser:$lastPass".toByteArray(), Base64.NO_WRAP)
 
                 // CRITICAL: Many DNS-based casters use virtual hosting and REQUIRE the Host header
-                val request = "GET /$lastMount HTTP/1.0\r\n" +
-                              "Host: $lastHost\r\n" +
+                // Including Port in Host header and using Ntrip-Version 2.0 style for better compatibility
+                val request = "GET /$lastMount HTTP/1.1\r\n" +
+                              "Host: $lastHost:$lastPort\r\n" +
+                              "Ntrip-Version: Ntrip/2.0\r\n" +
                               "User-Agent: NTRIP Witt3D_GIS\r\n" +
                               "Authorization: Basic $auth\r\n" +
                               "Connection: close\r\n" +

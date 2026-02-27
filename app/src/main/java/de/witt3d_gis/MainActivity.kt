@@ -20,13 +20,18 @@ import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.Spinner
+import android.widget.CheckBox
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.GravityCompat
+import androidx.drawerlayout.widget.DrawerLayout
+import com.google.android.material.navigation.NavigationView
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
@@ -52,7 +57,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var connectSerialButton: Button
     private lateinit var followButton: Button
     private lateinit var settingsButton: Button
-    private lateinit var wmsButton: Button
+    private lateinit var drawerLayout: DrawerLayout
+    private lateinit var menuButton: Button
+    private lateinit var styleRadioGroup: RadioGroup
+    private lateinit var wmsCheckbox: CheckBox
 
     private lateinit var serialLocationManager: SerialLocationManager
     private lateinit var serialLocationEngine: SerialLocationEngine
@@ -98,7 +106,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         connectSerialButton = findViewById(R.id.connectSerialButton)
         followButton = findViewById(R.id.followButton)
         settingsButton = findViewById(R.id.settingsButton)
-        wmsButton = findViewById(R.id.wmsButton)
+        drawerLayout = findViewById(R.id.drawerLayout)
+        menuButton = findViewById(R.id.menuButton)
+
+        val navView = findViewById<NavigationView>(R.id.navigationView)
+        styleRadioGroup = navView.findViewById(R.id.styleRadioGroup)
+        wmsCheckbox = navView.findViewById(R.id.wmsCheckbox)
 
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
@@ -143,9 +156,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
         }
 
-        wmsButton.setOnClickListener {
-            isWmsEnabled = !isWmsEnabled
-            wmsButton.text = if (isWmsEnabled) "WMS On" else "WMS Off"
+        menuButton.setOnClickListener {
+            drawerLayout.openDrawer(GravityCompat.START)
+        }
+
+        wmsCheckbox.setOnCheckedChangeListener { _, isChecked ->
+            isWmsEnabled = isChecked
             refreshWmsLayer()
         }
 
@@ -158,18 +174,28 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             registerReceiver(usbReceiver, filter)
         }
 
-        val styleSpinner = findViewById<Spinner>(R.id.styleSpinner)
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mapStyles.map { it.first })
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        styleSpinner.adapter = adapter
-        styleSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (::map.isInitialized) loadStyle(mapStyles[position].second)
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
+        setupLayerMenu()
 
         checkLocationPermission()
+    }
+
+    private fun setupLayerMenu() {
+        mapStyles.forEachIndexed { index, pair ->
+            val radioButton = RadioButton(this).apply {
+                id = View.generateViewId()
+                text = pair.first
+                if (index == 0) isChecked = true
+            }
+            styleRadioGroup.addView(radioButton)
+        }
+
+        styleRadioGroup.setOnCheckedChangeListener { group, checkedId ->
+            val radioButton = group.findViewById<RadioButton>(checkedId)
+            val index = group.indexOfChild(radioButton)
+            if (index >= 0 && index < mapStyles.size) {
+                loadStyle(mapStyles[index].second)
+            }
+        }
     }
 
     private fun loadStyle(url: String) {
@@ -194,17 +220,36 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (wmsUrl.isEmpty()) {
             Toast.makeText(this, "Please set WMS URL in Settings", Toast.LENGTH_SHORT).show()
             isWmsEnabled = false
-            wmsButton.text = "WMS Off"
+            wmsCheckbox.isChecked = false
             return
         }
 
         try {
+            updateStatus("Adding WMS Layer...")
             // MapLibre expect tile URL with {x} {y} {z} or similar.
             // For true WMS we need to build the BBOX request, but usually MapLibre handles TileJSON / Raster sources better
             val tileSet = TileSet("2.2.0", wmsUrl)
             val source = RasterSource("wms-source", tileSet, 256)
             style.addSource(source)
-            style.addLayerBelow(RasterLayer("wms-layer", "wms-source"), "label")
+
+            val wmsLayer = RasterLayer("wms-layer", "wms-source")
+
+            // Try to find a good place for the layer - ideally above the background but below labels
+            val layers = style.layers
+            var belowLayerId: String? = null
+            for (layer in layers) {
+                if (layer.id.contains("label", ignoreCase = true) || layer.id.contains("symbol", ignoreCase = true)) {
+                    belowLayerId = layer.id
+                    break
+                }
+            }
+
+            if (belowLayerId != null) {
+                style.addLayerBelow(wmsLayer, belowLayerId)
+            } else {
+                style.addLayer(wmsLayer)
+            }
+            updateStatus("WMS Layer Active")
         } catch (e: Exception) {
             Log.e(TAG, "WMS error: ${e.message}")
             updateStatus("WMS Error: ${e.message}")
