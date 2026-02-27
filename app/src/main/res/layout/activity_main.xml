@@ -112,6 +112,39 @@
                 android:textColor="@android:color/black"
                 android:textSize="14sp" />
         </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/zoomControls"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginEnd="16dp"
+            android:layout_marginBottom="16dp"
+            app:layout_constraintBottom_toTopOf="@id/statusContainer"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <Button
+                android:id="@+id/zoomInButton"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:text="+"
+                android:textSize="20sp"
+                android:backgroundTint="#80FFFFFF"
+                android:textColor="@android:color/black"
+                android:padding="0dp" />
+
+            <Button
+                android:id="@+id/zoomOutButton"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp"
+                android:text="-"
+                android:textSize="20sp"
+                android:backgroundTint="#80FFFFFF"
+                android:textColor="@android:color/black"
+                android:padding="0dp" />
+        </LinearLayout>
+
     </androidx.constraintlayout.widget.ConstraintLayout>
 
     <com.google.android.material.navigation.NavigationView

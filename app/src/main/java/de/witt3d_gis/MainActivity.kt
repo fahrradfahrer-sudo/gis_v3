@@ -39,6 +39,7 @@ import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
 import org.maplibre.android.maps.MapView
+import org.maplibre.android.location.LocationComponentOptions
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.RasterLayer
@@ -80,7 +81,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
         "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey",
         "MapLibre Demo" to "https://demotiles.maplibre.org/style.json",
-        "No Base Map" to "{\"version\": 8, \"sources\": {}, \"layers\": []}"
+        "No Base Map" to "{\"version\": 8, \"sources\": {}, \"layers\": [{\"id\": \"background\", \"type\": \"background\", \"paint\": {\"background-color\": \"#FFFFFF\"}}]}"
     )
 
     private val usbReceiver = object : BroadcastReceiver() {
@@ -138,6 +139,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView.getMapAsync { mapObj ->
             this.map = mapObj
             mapView.addOnDidFailLoadingMapListener { error -> updateStatus("Map Error: $error") }
+
+            // In older MapLibre versions, scale bar is set via ScaleBarPlugin or similar,
+            // but let's check if it's available via style or uiSettings properly.
+            // map.uiSettings.isScaleBarEnabled = true // This failed
+
             loadStyle(mapStyles[0].second)
         }
 
@@ -164,6 +170,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         wmsCheckbox.setOnCheckedChangeListener { _, isChecked ->
             isWmsEnabled = isChecked
             refreshWmsLayer()
+        }
+
+        findViewById<Button>(R.id.zoomInButton).setOnClickListener {
+            if (::map.isInitialized) map.animateCamera(CameraUpdateFactory.zoomIn())
+        }
+        findViewById<Button>(R.id.zoomOutButton).setOnClickListener {
+            if (::map.isInitialized) map.animateCamera(CameraUpdateFactory.zoomOut())
         }
 
         settingsButton.setOnClickListener { showSettingsDialog() }
@@ -247,7 +260,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         params += "&REQUEST=GetMap"
                     }
                     if (!finalWmsUrl.contains("LAYERS=", ignoreCase = true)) {
-                        params += "&LAYERS=0"
+                        val userLayers = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getString("wms_layers", "") ?: ""
+                        params += "&LAYERS=${if (userLayers.isNotEmpty()) userLayers else "0"}"
                     }
 
                     finalWmsUrl += separator + params
@@ -302,9 +316,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             try {
                 if (!map.locationComponent.isLocationComponentActivated) {
+                    val locationComponentOptions = LocationComponentOptions.builder(this)
+                        .gpsDrawable(R.drawable.ic_crosshair)
+                        .build()
+
                     val options = LocationComponentActivationOptions.builder(this@MainActivity, style)
                         .locationEngine(serialLocationEngine)
                         .useDefaultLocationEngine(false)
+                        .locationComponentOptions(locationComponentOptions)
                         .build()
                     map.locationComponent.activateLocationComponent(options)
                 }
@@ -329,8 +348,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val userInput = EditText(this).apply { hint = "NTRIP User"; setText(prefs.getString("user", "")) }
         val passInput = EditText(this).apply { hint = "NTRIP Pass"; setText(prefs.getString("pass", "")) }
         val wmsInput = EditText(this).apply { hint = "WMS URL"; setText(prefs.getString("wms_url", "")) }
+        val wmsLayersInput = EditText(this).apply { hint = "WMS Layers (e.g. layer1,layer2)"; setText(prefs.getString("wms_layers", "")) }
 
-        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput)
+        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsLayersInput)
 
         AlertDialog.Builder(this)
             .setTitle("Settings")
@@ -344,6 +364,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     .putString("user", userInput.text.toString().trim())
                     .putString("pass", passInput.text.toString().trim())
                     .putString("wms_url", wmsInput.text.toString().trim())
+                    .putString("wms_layers", wmsLayersInput.text.toString().trim())
                     .apply()
 
                 if (isSerialConnected) startNtripFromPrefs()
