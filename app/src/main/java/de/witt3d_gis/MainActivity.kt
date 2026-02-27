@@ -142,6 +142,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView.getMapAsync { mapObj ->
             this.map = mapObj
             mapView.addOnDidFailLoadingMapListener { error -> updateStatus("Map Error: $error") }
+            mapObj.setMaxZoomPreference(25.5)
             findViewById<ScaleBarView>(R.id.scaleBar).setMap(mapObj)
             loadStyle(mapStyles[0].second)
         }
@@ -253,11 +254,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 }
                 if (!finalWmsUrl.contains("BBOX", ignoreCase = true)) {
                     val separator = if (finalWmsUrl.contains("?")) "&" else "?"
-                    // Use WMS 1.1.1 by default for widest compatibility, MapLibre works well with SRS=EPSG:3857
+                    // We use WMS 1.1.1 parameters by default as they are most standard for Tile overlays
                     var params = "FORMAT=image/png&TRANSPARENT=TRUE&VERSION=1.1.1&SRS=EPSG:3857&WIDTH=256&HEIGHT=256&BBOX={bbox-epsg-3857}"
 
                     if (!finalWmsUrl.contains("REQUEST=", ignoreCase = true)) {
                         params += "&REQUEST=GetMap"
+                    }
+                    if (!finalWmsUrl.contains("STYLES=", ignoreCase = true)) {
+                        params += "&STYLES="
                     }
                     if (!finalWmsUrl.contains("LAYERS=", ignoreCase = true)) {
                         val userLayers = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getString("wms_layers", "") ?: ""
@@ -297,6 +301,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             if (belowLayerId != null) {
                 style.addLayerBelow(wmsLayer, belowLayerId)
             } else {
+                // If no labels found, add it to the top so it's definitely visible
                 style.addLayer(wmsLayer)
             }
             updateStatus("WMS Layer Active")
@@ -322,6 +327,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 if (!map.locationComponent.isLocationComponentActivated) {
                     val locationComponentOptions = LocationComponentOptions.builder(this)
                         .gpsDrawable(R.drawable.ic_crosshair)
+                        .bearingDrawable(R.drawable.ic_crosshair)
+                        .accuracyAlpha(0.0f) // Hide accuracy circle
                         .build()
 
                     val options = LocationComponentActivationOptions.builder(this@MainActivity, style)
@@ -364,8 +371,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             textSize = 10f
             setOnClickListener { discoverWmsLayers(wmsInput.text.toString(), wmsLayersInput) }
         }
+        val clearWmsButton = Button(this).apply {
+            text = "Clear"
+            textSize = 10f
+            setOnClickListener { wmsLayersInput.setText("") }
+        }
         wmsRow.addView(wmsLayersInput)
         wmsRow.addView(discoverButton)
+        wmsRow.addView(clearWmsButton)
 
         layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsRow)
 
@@ -446,8 +459,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     val content = match.groupValues[1]
                     val name = nameRegex.find(content)?.groupValues?.get(1)
                     val title = titleRegex.find(content)?.groupValues?.get(1) ?: name ?: ""
-                    if (name != null) {
-                        foundLayers.add(name to title)
+            // Filter out layers that don't have a Name (like group layers)
+            if (name != null && name.isNotBlank()) {
+                foundLayers.add(name.trim() to title.trim())
                     }
                 }
 
