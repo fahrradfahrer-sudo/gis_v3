@@ -79,7 +79,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
         "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
         "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey",
-        "MapLibre Demo" to "https://demotiles.maplibre.org/style.json"
+        "MapLibre Demo" to "https://demotiles.maplibre.org/style.json",
+        "No Base Map" to "{\"version\": 8, \"sources\": {}, \"layers\": []}"
     )
 
     private val usbReceiver = object : BroadcastReceiver() {
@@ -199,11 +200,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun loadStyle(url: String) {
-        updateStatus("Loading map...")
-        map.setStyle(url) { style ->
-            updateStatus("Map Ready")
-            enableLocationComponent(style)
-            if (isWmsEnabled) refreshWmsLayer()
+        updateStatus("Loading style...")
+        if (url.startsWith("{")) {
+            map.setStyle(Style.Builder().fromJson(url)) { style ->
+                updateStatus("Empty Style Ready")
+                enableLocationComponent(style)
+                if (isWmsEnabled) refreshWmsLayer()
+            }
+        } else {
+            map.setStyle(url) { style ->
+                updateStatus("Map Ready")
+                enableLocationComponent(style)
+                if (isWmsEnabled) refreshWmsLayer()
+            }
         }
     }
 
@@ -225,10 +234,33 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
 
         try {
-            updateStatus("Adding WMS Layer...")
+            var finalWmsUrl = wmsUrl.trim()
+            if (finalWmsUrl.contains("SERVICE=WMS", ignoreCase = true)) {
+                if (finalWmsUrl.contains("REQUEST=GetCapabilities", ignoreCase = true)) {
+                    finalWmsUrl = finalWmsUrl.replace("REQUEST=GetCapabilities", "REQUEST=GetMap", ignoreCase = true)
+                }
+                if (!finalWmsUrl.contains("BBOX", ignoreCase = true)) {
+                    val separator = if (finalWmsUrl.contains("?")) "&" else "?"
+                    var params = "FORMAT=image/png&TRANSPARENT=TRUE&VERSION=1.1.1&SRS=EPSG:3857&WIDTH=256&HEIGHT=256&BBOX={bbox-epsg-3857}"
+
+                    if (!finalWmsUrl.contains("REQUEST=", ignoreCase = true)) {
+                        params += "&REQUEST=GetMap"
+                    }
+                    if (!finalWmsUrl.contains("LAYERS=", ignoreCase = true)) {
+                        params += "&LAYERS=0"
+                    }
+
+                    finalWmsUrl += separator + params
+                }
+            } else if (!finalWmsUrl.contains("{x}") && !finalWmsUrl.contains("{bbox-epsg-3857}")) {
+                updateStatus("WMS Warning: URL missing {x} or BBOX")
+            }
+
+            Log.i(TAG, "WMS Final URL: $finalWmsUrl")
+            updateStatus("Adding WMS...")
+
             // MapLibre expect tile URL with {x} {y} {z} or similar.
-            // For true WMS we need to build the BBOX request, but usually MapLibre handles TileJSON / Raster sources better
-            val tileSet = TileSet("2.2.0", wmsUrl)
+            val tileSet = TileSet("2.2.0", finalWmsUrl)
             val source = RasterSource("wms-source", tileSet, 256)
             style.addSource(source)
 
