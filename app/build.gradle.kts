@@ -42,6 +42,7 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
     implementation(libs.maplibre.android.sdk)
+    implementation(libs.maplibre.scalebar)
     implementation(libs.usb.serial.android)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

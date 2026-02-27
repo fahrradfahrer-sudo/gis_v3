@@ -19,6 +19,7 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.CheckBox
 import android.widget.RadioButton
@@ -45,6 +46,8 @@ import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.sources.RasterSource
 import org.maplibre.android.style.sources.TileSet
+import java.net.URL
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener {
     private val TAG = "MainActivity"
@@ -139,11 +142,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView.getMapAsync { mapObj ->
             this.map = mapObj
             mapView.addOnDidFailLoadingMapListener { error -> updateStatus("Map Error: $error") }
-
-            // In older MapLibre versions, scale bar is set via ScaleBarPlugin or similar,
-            // but let's check if it's available via style or uiSettings properly.
-            // map.uiSettings.isScaleBarEnabled = true // This failed
-
+            findViewById<ScaleBarView>(R.id.scaleBar).setMap(mapObj)
             loadStyle(mapStyles[0].second)
         }
 
@@ -254,6 +253,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 }
                 if (!finalWmsUrl.contains("BBOX", ignoreCase = true)) {
                     val separator = if (finalWmsUrl.contains("?")) "&" else "?"
+                    // Use WMS 1.1.1 by default for widest compatibility, MapLibre works well with SRS=EPSG:3857
                     var params = "FORMAT=image/png&TRANSPARENT=TRUE&VERSION=1.1.1&SRS=EPSG:3857&WIDTH=256&HEIGHT=256&BBOX={bbox-epsg-3857}"
 
                     if (!finalWmsUrl.contains("REQUEST=", ignoreCase = true)) {
@@ -261,7 +261,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     }
                     if (!finalWmsUrl.contains("LAYERS=", ignoreCase = true)) {
                         val userLayers = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getString("wms_layers", "") ?: ""
-                        params += "&LAYERS=${if (userLayers.isNotEmpty()) userLayers else "0"}"
+                        if (userLayers.isNotEmpty()) {
+                            params += "&LAYERS=$userLayers"
+                        } else {
+                            updateStatus("WMS Warning: No Layers set")
+                        }
                     }
 
                     finalWmsUrl += separator + params
@@ -348,9 +352,22 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val userInput = EditText(this).apply { hint = "NTRIP User"; setText(prefs.getString("user", "")) }
         val passInput = EditText(this).apply { hint = "NTRIP Pass"; setText(prefs.getString("pass", "")) }
         val wmsInput = EditText(this).apply { hint = "WMS URL"; setText(prefs.getString("wms_url", "")) }
-        val wmsLayersInput = EditText(this).apply { hint = "WMS Layers (e.g. layer1,layer2)"; setText(prefs.getString("wms_layers", "")) }
 
-        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsLayersInput)
+        val wmsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val wmsLayersInput = EditText(this).apply {
+            hint = "WMS Layers (e.g. layer1,layer2)"
+            setText(prefs.getString("wms_layers", ""))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val discoverButton = Button(this).apply {
+            text = "Search"
+            textSize = 10f
+            setOnClickListener { discoverWmsLayers(wmsInput.text.toString(), wmsLayersInput) }
+        }
+        wmsRow.addView(wmsLayersInput)
+        wmsRow.addView(discoverButton)
+
+        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsRow)
 
         AlertDialog.Builder(this)
             .setTitle("Settings")
@@ -397,6 +414,69 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 }
             }
             .show()
+    }
+
+    private fun discoverWmsLayers(baseUrl: String, targetInput: EditText) {
+        if (baseUrl.isEmpty()) {
+            Toast.makeText(this, "Enter WMS URL first", Toast.LENGTH_SHORT).show()
+            return
+        }
+        updateStatus("Searching WMS Layers...")
+        Thread {
+            try {
+                var url = baseUrl.trim()
+                if (!url.contains("REQUEST=", ignoreCase = true)) {
+                    val sep = if (url.contains("?")) "&" else "?"
+                    url += "${sep}SERVICE=WMS&REQUEST=GetCapabilities"
+                }
+
+                val connection = URL(url).openConnection()
+                connection.connectTimeout = 5000
+                connection.readTimeout = 10000
+                val xml = connection.getInputStream().bufferedReader().use { it.readText() }
+
+                // Very simple regex-based parser for <Layer> elements
+                // Looking for <Name> and optionally <Title>
+                val layerRegex = Regex("<Layer[^>]*>([\\s\\S]*?)</Layer>")
+                val nameRegex = Regex("<Name>([^<]+)</Name>")
+                val titleRegex = Regex("<Title>([^<]+)</Title>")
+
+                val foundLayers = mutableListOf<Pair<String, String>>()
+                layerRegex.findAll(xml).forEach { match ->
+                    val content = match.groupValues[1]
+                    val name = nameRegex.find(content)?.groupValues?.get(1)
+                    val title = titleRegex.find(content)?.groupValues?.get(1) ?: name ?: ""
+                    if (name != null) {
+                        foundLayers.add(name to title)
+                    }
+                }
+
+                runOnUiThread {
+                    if (foundLayers.isEmpty()) {
+                        updateStatus("No Layers found")
+                        Toast.makeText(this, "No layers found in XML", Toast.LENGTH_SHORT).show()
+                    } else {
+                        updateStatus("Found ${foundLayers.size} layers")
+                        val names = foundLayers.map { "${it.second} (${it.first})" }.toTypedArray()
+                        val selected = BooleanArray(foundLayers.size)
+
+                        AlertDialog.Builder(this)
+                            .setTitle("Select Layers")
+                            .setMultiChoiceItems(names, selected) { _, which, isChecked ->
+                                selected[which] = isChecked
+                            }
+                            .setPositiveButton("OK") { _, _ ->
+                                val picked = foundLayers.filterIndexed { i, _ -> selected[i] }.joinToString(",") { it.first }
+                                targetInput.setText(picked)
+                            }
+                            .show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Discovery error: ${e.message}")
+                runOnUiThread { updateStatus("Search Error: ${e.message}") }
+            }
+        }.start()
     }
 
     private fun connectToSerial(device: UsbDevice) {

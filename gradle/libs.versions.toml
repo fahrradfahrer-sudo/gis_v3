@@ -10,6 +10,7 @@ material = "1.12.0"
 activity = "1.9.3"
 constraintlayout = "2.2.1"
 maplibre = "11.11.0"
+maplibre-plugins = "1.0.0"
 usb-serial = "3.8.0"
 
 [libraries]
@@ -22,6 +23,7 @@ material = { group = "com.google.android.material", name = "material", version.r
 androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }
 androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 maplibre-android-sdk = { group = "org.maplibre.gl", name = "android-sdk", version.ref = "maplibre" }
+maplibre-scalebar = { group = "org.maplibre.gl", name = "android-plugin-scalebar-v9", version.ref = "maplibre-plugins" }
 usb-serial-android = { group = "com.github.mik3y", name = "usb-serial-for-android", version.ref = "usb-serial" }
 
 [plugins]

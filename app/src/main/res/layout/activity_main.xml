@@ -113,6 +113,15 @@
                 android:textSize="14sp" />
         </LinearLayout>
 
+        <de.witt3d_gis.ScaleBarView
+            android:id="@+id/scaleBar"
+            android:layout_width="200dp"
+            android:layout_height="60dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginBottom="8dp"
+            app:layout_constraintBottom_toTopOf="@id/zoomControls"
+            app:layout_constraintEnd_toEndOf="parent" />
+
         <LinearLayout
             android:id="@+id/zoomControls"
             android:layout_width="wrap_content"
