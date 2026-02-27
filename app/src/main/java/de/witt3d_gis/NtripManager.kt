@@ -6,6 +6,7 @@ import android.util.Base64
 import android.util.Log
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.Executors
@@ -54,9 +55,13 @@ class NtripManager {
         while (isRunning) {
             var currentSocket: Socket? = null
             try {
-                Log.i(TAG, "NTRIP: Connecting to $lastHost:$lastPort...")
+                Log.i(TAG, "NTRIP: Resolving $lastHost...")
+                val addresses = InetAddress.getAllByName(lastHost)
+                val targetAddr = addresses[0]
+                Log.i(TAG, "NTRIP: Resolved to ${targetAddr.hostAddress}. Connecting to port $lastPort...")
+
                 currentSocket = Socket()
-                currentSocket.connect(InetSocketAddress(lastHost, lastPort), 10000)
+                currentSocket.connect(InetSocketAddress(targetAddr, lastPort), 10000)
                 currentSocket.soTimeout = 20000
                 socket = currentSocket
 
@@ -64,8 +69,10 @@ class NtripManager {
                 val inputStream = currentSocket.getInputStream()
 
                 val auth = Base64.encodeToString("$lastUser:$lastPass".toByteArray(), Base64.NO_WRAP)
-                // Use pure NTRIP 1.0 format for best compatibility with older casters
+
+                // CRITICAL: Many DNS-based casters use virtual hosting and REQUIRE the Host header
                 val request = "GET /$lastMount HTTP/1.0\r\n" +
+                              "Host: $lastHost\r\n" +
                               "User-Agent: NTRIP Witt3D_GIS\r\n" +
                               "Authorization: Basic $auth\r\n" +
                               "Connection: close\r\n" +
@@ -74,16 +81,15 @@ class NtripManager {
                 outputStream.write(request.toByteArray())
                 outputStream.flush()
 
-                val buffer = ByteArray(4096)
+                val buffer = ByteArray(8192)
                 var bytesRead = inputStream.read(buffer)
                 if (bytesRead > 0) {
                     val response = String(buffer, 0, bytesRead)
-                    Log.i(TAG, "NTRIP: Response line: ${response.split("\r\n")[0]}")
+                    Log.i(TAG, "NTRIP: Response: ${response.split("\r\n")[0]}")
 
                     if (response.contains("200 OK") || response.contains("ICY 200 OK")) {
                         mainHandler.post { listener?.onConnected() }
 
-                        // Handle data already in buffer
                         val headerEnd = response.indexOf("\r\n\r\n")
                         if (headerEnd != -1) {
                             val binaryStart = headerEnd + 4
@@ -92,7 +98,6 @@ class NtripManager {
                             }
                         }
 
-                        // Read RTCM stream
                         while (isRunning) {
                             bytesRead = inputStream.read(buffer)
                             if (bytesRead == -1) break
@@ -103,7 +108,7 @@ class NtripManager {
                         }
                     } else {
                         val err = response.split("\r\n")[0]
-                        Log.e(TAG, "NTRIP Auth failed: $err")
+                        Log.e(TAG, "NTRIP Auth failed: $err. Full response: $response")
                         mainHandler.post { listener?.onError("Auth: $err") }
                         if (response.contains("401") || response.contains("403")) isRunning = false
                     }
@@ -120,9 +125,9 @@ class NtripManager {
             }
 
             if (isRunning) {
-                Log.i(TAG, "NTRIP: Retrying in 2s...")
+                Log.i(TAG, "NTRIP: Retrying in 3s...")
                 mainHandler.post { listener?.onDisconnected() }
-                Thread.sleep(2000)
+                Thread.sleep(3000)
             }
         }
     }
@@ -134,7 +139,7 @@ class NtripManager {
                 if (isRunning && currentSocket?.isConnected == true) {
                     val out = currentSocket.getOutputStream()
                     val msg = if (gga.endsWith("\r\n")) gga else "$gga\r\n"
-                    synchronized(currentSocket) {
+                    synchronized(out) {
                         out.write(msg.toByteArray())
                         out.flush()
                     }

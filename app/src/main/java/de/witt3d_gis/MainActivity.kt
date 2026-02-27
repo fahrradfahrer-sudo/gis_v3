@@ -36,6 +36,9 @@ import org.maplibre.android.location.modes.RenderMode
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.RasterLayer
+import org.maplibre.android.style.sources.RasterSource
+import org.maplibre.android.style.sources.TileSet
 
 class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener {
     private val TAG = "MainActivity"
@@ -49,12 +52,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var connectSerialButton: Button
     private lateinit var followButton: Button
     private lateinit var settingsButton: Button
+    private lateinit var wmsButton: Button
 
     private lateinit var serialLocationManager: SerialLocationManager
     private lateinit var serialLocationEngine: SerialLocationEngine
     private lateinit var ntripManager: NtripManager
 
     private var isSerialConnected = false
+    private var isNtripActive = false
+    private var isWmsEnabled = false
     private var pendingDevice: UsbDevice? = null
     private var isFirstFix = true
 
@@ -92,6 +98,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         connectSerialButton = findViewById(R.id.connectSerialButton)
         followButton = findViewById(R.id.followButton)
         settingsButton = findViewById(R.id.settingsButton)
+        wmsButton = findViewById(R.id.wmsButton)
 
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
@@ -103,8 +110,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 if (isSerialConnected) serialLocationManager.write(data)
             }
             override fun onError(message: String) { updateStatus("NTRIP: $message") }
-            override fun onConnected() { updateStatus("NTRIP: Connected") }
-            override fun onDisconnected() { updateStatus("NTRIP: Disconnected") }
+            override fun onConnected() {
+                updateStatus("NTRIP: Connected")
+                isNtripActive = true
+            }
+            override fun onDisconnected() {
+                updateStatus("NTRIP: Disconnected")
+                isNtripActive = false
+            }
         }
 
         mapView.onCreate(savedInstanceState)
@@ -128,6 +141,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 map.locationComponent.cameraMode = CameraMode.TRACKING
                 Toast.makeText(this, "Following location", Toast.LENGTH_SHORT).show()
             }
+        }
+
+        wmsButton.setOnClickListener {
+            isWmsEnabled = !isWmsEnabled
+            wmsButton.text = if (isWmsEnabled) "WMS On" else "WMS Off"
+            refreshWmsLayer()
         }
 
         settingsButton.setOnClickListener { showSettingsDialog() }
@@ -158,6 +177,37 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         map.setStyle(url) { style ->
             updateStatus("Map Ready")
             enableLocationComponent(style)
+            if (isWmsEnabled) refreshWmsLayer()
+        }
+    }
+
+    private fun refreshWmsLayer() {
+        val style = map.style ?: return
+        style.removeLayer("wms-layer")
+        style.removeSource("wms-source")
+
+        if (!isWmsEnabled) return
+
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val wmsUrl = prefs.getString("wms_url", "") ?: ""
+
+        if (wmsUrl.isEmpty()) {
+            Toast.makeText(this, "Please set WMS URL in Settings", Toast.LENGTH_SHORT).show()
+            isWmsEnabled = false
+            wmsButton.text = "WMS Off"
+            return
+        }
+
+        try {
+            // MapLibre expect tile URL with {x} {y} {z} or similar.
+            // For true WMS we need to build the BBOX request, but usually MapLibre handles TileJSON / Raster sources better
+            val tileSet = TileSet("2.2.0", wmsUrl)
+            val source = RasterSource("wms-source", tileSet, 256)
+            style.addSource(source)
+            style.addLayerBelow(RasterLayer("wms-layer", "wms-source"), "label")
+        } catch (e: Exception) {
+            Log.e(TAG, "WMS error: ${e.message}")
+            updateStatus("WMS Error: ${e.message}")
         }
     }
 
@@ -201,8 +251,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val mountInput = EditText(this).apply { hint = "NTRIP Mount"; setText(prefs.getString("mount", "")) }
         val userInput = EditText(this).apply { hint = "NTRIP User"; setText(prefs.getString("user", "")) }
         val passInput = EditText(this).apply { hint = "NTRIP Pass"; setText(prefs.getString("pass", "")) }
+        val wmsInput = EditText(this).apply { hint = "WMS URL"; setText(prefs.getString("wms_url", "")) }
 
-        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput)
+        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput)
 
         AlertDialog.Builder(this)
             .setTitle("Settings")
@@ -215,18 +266,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     .putString("mount", mountInput.text.toString().trim())
                     .putString("user", userInput.text.toString().trim())
                     .putString("pass", passInput.text.toString().trim())
+                    .putString("wms_url", wmsInput.text.toString().trim())
                     .apply()
 
-                if (isSerialConnected) {
-                    startNtripFromPrefs()
-                } else {
-                    Toast.makeText(this, "Settings saved. Connect serial to start NTRIP.", Toast.LENGTH_SHORT).show()
-                }
+                if (isSerialConnected) startNtripFromPrefs()
+                if (isWmsEnabled) refreshWmsLayer()
             }
             .setNegativeButton("Cancel", null)
-            .setNeutralButton("Stop NTRIP") { _, _ ->
-                ntripManager.disconnect()
-            }
+            .setNeutralButton("Stop NTRIP") { _, _ -> ntripManager.disconnect() }
             .show()
     }
 
@@ -266,7 +313,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     override fun onGgaReceived(sentence: String) {
-        ntripManager.sendGga(sentence)
+        if (isNtripActive) ntripManager.sendGga(sentence)
     }
 
     override fun onLocationUpdate(location: SerialLocation) {
@@ -319,6 +366,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onDisconnected() {
         isSerialConnected = false
+        isNtripActive = false
         runOnUiThread { connectSerialButton.text = "Connect" }
         updateStatus("Disconnected")
     }
