@@ -1,14 +1,30 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="24dp"
-    android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+    <!-- Circle with outline -->
+    <path
+        android:strokeColor="#000000"
+        android:strokeWidth="1.5"
+        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
     <path
         android:strokeColor="#FF0000"
-        android:strokeWidth="2"
-        android:pathData="M12,2 L12,22 M2,12 L22,12" />
+        android:strokeWidth="1.2"
+        android:pathData="M16,16 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+
+    <!-- Cross lines with gaps -->
+    <path
+        android:strokeColor="#000000"
+        android:strokeWidth="1.5"
+        android:pathData="M16,2 L16,10 M16,22 L16,30 M2,16 L10,16 M22,16 L30,16" />
     <path
         android:strokeColor="#FF0000"
-        android:strokeWidth="2"
-        android:pathData="M12,12 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+        android:strokeWidth="1.2"
+        android:pathData="M16,2.5 L16,9.5 M16,22.5 L16,29.5 M2.5,16 L9.5,16 M22.5,16 L29.5,16" />
+
+    <!-- Center Dot -->
+    <path
+        android:fillColor="#FF0000"
+        android:pathData="M16,16 m-1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0" />
 </vector>

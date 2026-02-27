@@ -12,6 +12,7 @@ import android.hardware.usb.UsbManager
 import android.location.Location
 import android.os.Build
 import android.os.Bundle
+import android.graphics.Color
 import android.os.SystemClock
 import android.util.Log
 import android.view.View
@@ -43,9 +44,15 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.location.LocationComponentOptions
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.RasterLayer
+import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.android.style.sources.RasterSource
 import org.maplibre.android.style.sources.TileSet
+import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
+import org.maplibre.geojson.Point
 import java.net.URL
 import java.util.concurrent.TimeUnit
 
@@ -255,7 +262,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 if (!finalWmsUrl.contains("BBOX", ignoreCase = true)) {
                     val separator = if (finalWmsUrl.contains("?")) "&" else "?"
                     // We use WMS 1.1.1 parameters by default as they are most standard for Tile overlays
-                    var params = "FORMAT=image/png&TRANSPARENT=TRUE&VERSION=1.1.1&SRS=EPSG:3857&WIDTH=256&HEIGHT=256&BBOX={bbox-epsg-3857}"
+                    // Using 512 width/height for better detail at high zoom
+                    var params = "FORMAT=image/png&TRANSPARENT=TRUE&VERSION=1.1.1&SRS=EPSG:3857&WIDTH=512&HEIGHT=512&BBOX={bbox-epsg-3857}"
 
                     if (!finalWmsUrl.contains("REQUEST=", ignoreCase = true)) {
                         params += "&REQUEST=GetMap"
@@ -283,7 +291,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // MapLibre expect tile URL with {x} {y} {z} or similar.
             val tileSet = TileSet("2.2.0", finalWmsUrl)
-            val source = RasterSource("wms-source", tileSet, 256)
+            val source = RasterSource("wms-source", tileSet, 512)
             style.addSource(source)
 
             val wmsLayer = RasterLayer("wms-layer", "wms-source")
@@ -380,7 +388,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         wmsRow.addView(discoverButton)
         wmsRow.addView(clearWmsButton)
 
-        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsRow)
+        val importButton = Button(this).apply {
+            text = "Import Coordinates (Name,Lat,Lon)"
+            setOnClickListener { showImportDialog() }
+        }
+
+        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsRow); layout.addView(importButton)
 
         AlertDialog.Builder(this)
             .setTitle("Settings")
@@ -491,6 +504,62 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 runOnUiThread { updateStatus("Search Error: ${e.message}") }
             }
         }.start()
+    }
+
+    private fun showImportDialog() {
+        val input = EditText(this).apply {
+            hint = "Point1, 50.123, 8.456\nPoint2, 50.456, 8.789"
+            minLines = 5
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Import Coordinates")
+            .setView(input)
+            .setPositiveButton("Import") { _, _ ->
+                importCoordinates(input.text.toString())
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun importCoordinates(csv: String) {
+        val features = mutableListOf<Feature>()
+        csv.lines().forEach { line ->
+            val parts = line.split(",").map { it.trim() }
+            if (parts.size >= 3) {
+                try {
+                    val name = parts[0]
+                    val lat = parts[1].toDouble()
+                    val lon = parts[2].toDouble()
+                    val feature = Feature.fromGeometry(Point.fromLngLat(lon, lat))
+                    feature.addStringProperty("name", name)
+                    features.add(feature)
+                } catch (e: Exception) { Log.e(TAG, "CSV error: ${e.message}") }
+            }
+        }
+
+        if (features.isNotEmpty()) {
+            map.style?.let { style ->
+                style.removeLayer("import-layer")
+                style.removeSource("import-source")
+
+                val source = GeoJsonSource("import-source", FeatureCollection.fromFeatures(features))
+                style.addSource(source)
+
+                val layer = SymbolLayer("import-layer", "import-source")
+                layer.setProperties(
+                    PropertyFactory.textField("{name}"),
+                    PropertyFactory.textSize(14f),
+                    PropertyFactory.textOffset(arrayOf(0f, 1f)),
+                    PropertyFactory.textColor(Color.RED),
+                    PropertyFactory.textHaloColor(Color.WHITE),
+                    PropertyFactory.textHaloWidth(1f)
+                )
+                style.addLayer(layer)
+                updateStatus("Imported ${features.size} points")
+            }
+        } else {
+            Toast.makeText(this, "No valid coordinates found", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun connectToSerial(device: UsbDevice) {
