@@ -54,7 +54,10 @@ import org.maplibre.android.style.sources.TileSet
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.Point
+import org.maplibre.geojson.LineString
+import org.maplibre.geojson.Polygon
 import androidx.activity.result.contract.ActivityResultContracts
+import java.io.InputStream
 import java.net.URL
 import java.util.concurrent.TimeUnit
 
@@ -89,7 +92,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val PERMISSION_REQUEST_LOCATION = 1001
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { importGeoJsonFromUri(it) }
+        uri?.let { handleImportedFile(it) }
     }
 
     private val mapStyles = listOf(
@@ -297,8 +300,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // MapLibre expect tile URL with {x} {y} {z} or similar.
             val tileSet = TileSet("2.2.0", finalWmsUrl)
-            // Some WMS have better quality at level 18-20, we can try to hint maxzoom
-            tileSet.maxZoom = 20f
+            // Setting high maxZoom for TileSet prevents the SDK from over-scaling symbols too early
+            tileSet.maxZoom = 25f
             val source = RasterSource("wms-source", tileSet, 512)
             style.addSource(source)
 
@@ -401,8 +404,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             setOnClickListener { showImportDialog() }
         }
         val geojsonButton = Button(this).apply {
-            text = "Import GeoJSON File"
-            setOnClickListener { openGeoJsonPicker() }
+            text = "Import GeoJSON/Shape File"
+            setOnClickListener { openFilePicker() }
         }
 
         layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsRow); layout.addView(importButton); layout.addView(geojsonButton)
@@ -533,8 +536,126 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             .show()
     }
 
-    private fun openGeoJsonPicker() {
+    private fun openFilePicker() {
         filePicker.launch("*/*")
+    }
+
+    private fun handleImportedFile(uri: android.net.Uri) {
+        val fileName = getFileName(uri)
+        if (fileName.endsWith(".json", ignoreCase = true) || fileName.endsWith(".geojson", ignoreCase = true)) {
+            importGeoJsonFromUri(uri)
+        } else if (fileName.endsWith(".shp", ignoreCase = true)) {
+            importShapefile(uri)
+        } else {
+            Toast.makeText(this, "Unsupported file: $fileName", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun getFileName(uri: android.net.Uri): String {
+        var result: String? = null
+        if (uri.scheme == "content") {
+            val cursor = contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val index = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (index != -1) result = it.getString(index)
+                }
+            }
+        }
+        if (result == null) {
+            result = uri.path
+            val cut = result?.lastIndexOf('/')
+            if (cut != null && cut != -1) result = result?.substring(cut + 1)
+        }
+        return result ?: "unknown"
+    }
+
+    private fun importShapefile(uri: android.net.Uri) {
+        Toast.makeText(this, "SHP import: Point features only", Toast.LENGTH_SHORT).show()
+        updateStatus("Reading SHP...")
+        Thread {
+            try {
+                contentResolver.openInputStream(uri)?.use { stream ->
+                    val bytes = stream.readBytes()
+                    if (bytes.size < 100) return@use
+
+                    val magic = (bytes[0].toInt() and 0xFF shl 24) or (bytes[1].toInt() and 0xFF shl 16) or (bytes[2].toInt() and 0xFF shl 8) or (bytes[3].toInt() and 0xFF)
+                    if (magic != 9994) {
+                         runOnUiThread { Toast.makeText(this@MainActivity, "Not a valid SHP file", Toast.LENGTH_SHORT).show() }
+                         return@use
+                    }
+
+                    val features = mutableListOf<Feature>()
+                    var pos = 100
+                    var count = 0
+                    while (pos + 8 <= bytes.size) {
+                        val contentLength = ((bytes[pos+4].toInt() and 0xFF) shl 24) or
+                                            ((bytes[pos+5].toInt() and 0xFF) shl 16) or
+                                            ((bytes[pos+6].toInt() and 0xFF) shl 8) or
+                                            (bytes[pos+7].toInt() and 0xFF)
+
+                        val dataStart = pos + 8
+                        if (dataStart + 4 > bytes.size) break
+
+                        val type = (bytes[dataStart].toInt() and 0xFF) or ((bytes[dataStart+1].toInt() and 0xFF) shl 8)
+
+                        if (type == 1) { // Point
+                            if (dataStart + 20 <= bytes.size) {
+                                val x = java.nio.ByteBuffer.wrap(bytes, dataStart + 4, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).double
+                                val y = java.nio.ByteBuffer.wrap(bytes, dataStart + 12, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).double
+
+                                val feature = Feature.fromGeometry(Point.fromLngLat(x, y))
+                                feature.addStringProperty("name", "SHP Pt ${++count}")
+                                features.add(feature)
+                            }
+                        }
+
+                        pos += 8 + (contentLength * 2)
+                    }
+
+                    runOnUiThread {
+                        if (features.isNotEmpty()) displayImportedFeatures(features, "SHP")
+                        else Toast.makeText(this@MainActivity, "No Points found in SHP", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "SHP error: ${e.message}")
+                runOnUiThread { updateStatus("SHP Error: ${e.message}") }
+            }
+        }.start()
+    }
+
+    private fun displayImportedFeatures(features: List<Feature>, sourceName: String) {
+        map.style?.let { style ->
+            style.removeLayer("import-circle-layer")
+            style.removeLayer("import-label-layer")
+            style.removeLayer("import-layer")
+            style.removeSource("import-source")
+
+            val source = GeoJsonSource("import-source", FeatureCollection.fromFeatures(features))
+            style.addSource(source)
+
+            val circleLayer = CircleLayer("import-circle-layer", "import-source")
+            circleLayer.setProperties(
+                PropertyFactory.circleRadius(3f),
+                PropertyFactory.circleColor(Color.RED),
+                PropertyFactory.circleStrokeWidth(1f),
+                PropertyFactory.circleStrokeColor(Color.WHITE)
+            )
+            style.addLayer(circleLayer)
+
+            val labelLayer = SymbolLayer("import-label-layer", "import-source")
+            labelLayer.setProperties(
+                PropertyFactory.textField("{name}"),
+                PropertyFactory.textSize(12f),
+                PropertyFactory.textOffset(arrayOf(0f, 1.2f)),
+                PropertyFactory.textColor(Color.BLACK),
+                PropertyFactory.textHaloColor(Color.WHITE),
+                PropertyFactory.textHaloWidth(1.5f)
+            )
+            style.addLayer(labelLayer)
+            updateStatus("Imported $sourceName: ${features.size} items")
+        }
     }
 
     private fun importGeoJsonFromUri(uri: android.net.Uri) {
@@ -542,22 +663,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             contentResolver.openInputStream(uri)?.use { stream ->
                 val json = stream.bufferedReader().use { it.readText() }
                 val featureCollection = FeatureCollection.fromJson(json)
-
-                map.style?.let { style ->
-                    style.removeLayer("geojson-layer")
-                    style.removeSource("geojson-source")
-
-                    val source = GeoJsonSource("geojson-source", featureCollection)
-                    style.addSource(source)
-
-                    val layer = SymbolLayer("geojson-layer", "geojson-source")
-                    layer.setProperties(
-                        PropertyFactory.textField("{name}"),
-                        PropertyFactory.textSize(12f),
-                        PropertyFactory.textColor(Color.BLUE)
-                    )
-                    style.addLayer(layer)
-                    updateStatus("Imported GeoJSON")
+                if (featureCollection.features() != null) {
+                    displayImportedFeatures(featureCollection.features()!!, "GeoJSON")
                 }
             }
         } catch (e: Exception) {
@@ -583,36 +690,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
 
         if (features.isNotEmpty()) {
-            map.style?.let { style ->
-                style.removeLayer("import-circle-layer")
-                style.removeLayer("import-label-layer")
-                style.removeLayer("import-layer")
-                style.removeSource("import-source")
-
-                val source = GeoJsonSource("import-source", FeatureCollection.fromFeatures(features))
-                style.addSource(source)
-
-                val circleLayer = CircleLayer("import-circle-layer", "import-source")
-                circleLayer.setProperties(
-                    PropertyFactory.circleRadius(4f),
-                    PropertyFactory.circleColor(Color.RED),
-                    PropertyFactory.circleStrokeWidth(1f),
-                    PropertyFactory.circleStrokeColor(Color.WHITE)
-                )
-                style.addLayer(circleLayer)
-
-                val labelLayer = SymbolLayer("import-label-layer", "import-source")
-                labelLayer.setProperties(
-                    PropertyFactory.textField("{name}"),
-                    PropertyFactory.textSize(12f),
-                    PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
-                    PropertyFactory.textColor(Color.BLACK),
-                    PropertyFactory.textHaloColor(Color.WHITE),
-                    PropertyFactory.textHaloWidth(1f)
-                )
-                style.addLayer(labelLayer)
-                updateStatus("Imported ${features.size} points")
-            }
+            displayImportedFeatures(features, "CSV")
         } else {
             Toast.makeText(this, "No valid coordinates found", Toast.LENGTH_SHORT).show()
         }
