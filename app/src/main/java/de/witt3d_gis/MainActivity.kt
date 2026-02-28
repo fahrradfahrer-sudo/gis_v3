@@ -44,6 +44,7 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.location.LocationComponentOptions
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.layers.SymbolLayer
@@ -53,6 +54,7 @@ import org.maplibre.android.style.sources.TileSet
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.Point
+import androidx.activity.result.contract.ActivityResultContracts
 import java.net.URL
 import java.util.concurrent.TimeUnit
 
@@ -85,6 +87,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
+
+    private val filePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { importGeoJsonFromUri(it) }
+    }
 
     private val mapStyles = listOf(
         "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
@@ -291,6 +297,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // MapLibre expect tile URL with {x} {y} {z} or similar.
             val tileSet = TileSet("2.2.0", finalWmsUrl)
+            // Some WMS have better quality at level 18-20, we can try to hint maxzoom
+            tileSet.maxZoom = 20f
             val source = RasterSource("wms-source", tileSet, 512)
             style.addSource(source)
 
@@ -389,11 +397,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         wmsRow.addView(clearWmsButton)
 
         val importButton = Button(this).apply {
-            text = "Import Coordinates (Name,Lat,Lon)"
+            text = "Import CSV (Name,Lat,Lon)"
             setOnClickListener { showImportDialog() }
         }
+        val geojsonButton = Button(this).apply {
+            text = "Import GeoJSON File"
+            setOnClickListener { openGeoJsonPicker() }
+        }
 
-        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsRow); layout.addView(importButton)
+        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsRow); layout.addView(importButton); layout.addView(geojsonButton)
 
         AlertDialog.Builder(this)
             .setTitle("Settings")
@@ -521,6 +533,39 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             .show()
     }
 
+    private fun openGeoJsonPicker() {
+        filePicker.launch("*/*")
+    }
+
+    private fun importGeoJsonFromUri(uri: android.net.Uri) {
+        try {
+            contentResolver.openInputStream(uri)?.use { stream ->
+                val json = stream.bufferedReader().use { it.readText() }
+                val featureCollection = FeatureCollection.fromJson(json)
+
+                map.style?.let { style ->
+                    style.removeLayer("geojson-layer")
+                    style.removeSource("geojson-source")
+
+                    val source = GeoJsonSource("geojson-source", featureCollection)
+                    style.addSource(source)
+
+                    val layer = SymbolLayer("geojson-layer", "geojson-source")
+                    layer.setProperties(
+                        PropertyFactory.textField("{name}"),
+                        PropertyFactory.textSize(12f),
+                        PropertyFactory.textColor(Color.BLUE)
+                    )
+                    style.addLayer(layer)
+                    updateStatus("Imported GeoJSON")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "GeoJSON error: ${e.message}")
+            Toast.makeText(this, "Failed to load GeoJSON", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun importCoordinates(csv: String) {
         val features = mutableListOf<Feature>()
         csv.lines().forEach { line ->
@@ -539,22 +584,33 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
         if (features.isNotEmpty()) {
             map.style?.let { style ->
+                style.removeLayer("import-circle-layer")
+                style.removeLayer("import-label-layer")
                 style.removeLayer("import-layer")
                 style.removeSource("import-source")
 
                 val source = GeoJsonSource("import-source", FeatureCollection.fromFeatures(features))
                 style.addSource(source)
 
-                val layer = SymbolLayer("import-layer", "import-source")
-                layer.setProperties(
+                val circleLayer = CircleLayer("import-circle-layer", "import-source")
+                circleLayer.setProperties(
+                    PropertyFactory.circleRadius(4f),
+                    PropertyFactory.circleColor(Color.RED),
+                    PropertyFactory.circleStrokeWidth(1f),
+                    PropertyFactory.circleStrokeColor(Color.WHITE)
+                )
+                style.addLayer(circleLayer)
+
+                val labelLayer = SymbolLayer("import-label-layer", "import-source")
+                labelLayer.setProperties(
                     PropertyFactory.textField("{name}"),
-                    PropertyFactory.textSize(14f),
-                    PropertyFactory.textOffset(arrayOf(0f, 1f)),
-                    PropertyFactory.textColor(Color.RED),
+                    PropertyFactory.textSize(12f),
+                    PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
+                    PropertyFactory.textColor(Color.BLACK),
                     PropertyFactory.textHaloColor(Color.WHITE),
                     PropertyFactory.textHaloWidth(1f)
                 )
-                style.addLayer(layer)
+                style.addLayer(labelLayer)
                 updateStatus("Imported ${features.size} points")
             }
         } else {
