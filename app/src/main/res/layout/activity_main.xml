@@ -25,7 +25,21 @@
                 android:id="@+id/menuButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Layers"
+                android:text="Menu"
+                android:textSize="12sp" />
+
+            <Spinner
+                android:id="@+id/baudSpinner"
+                android:layout_width="100dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp" />
+
+            <Button
+                android:id="@+id/connectSerialButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="Connect"
                 android:textSize="12sp" />
 
             <Space
@@ -46,13 +60,26 @@
                     android:textSize="12sp"
                     android:textStyle="bold"
                     android:textColor="@android:color/black" />
-                <TextView
-                    android:id="@+id/satCountText"
+                <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Sats: 0"
-                    android:textSize="10sp"
-                    android:textColor="@android:color/black" />
+                    android:orientation="horizontal">
+                    <TextView
+                        android:id="@+id/satCountText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Sats: 0"
+                        android:textSize="10sp"
+                        android:textColor="@android:color/black" />
+                    <TextView
+                        android:id="@+id/rtkAgeText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:text="Age: -"
+                        android:textSize="10sp"
+                        android:textColor="@android:color/black" />
+                </LinearLayout>
             </LinearLayout>
 
             <Space
@@ -61,19 +88,19 @@
                 android:layout_weight="1" />
 
             <Button
-                android:id="@+id/connectSerialButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:text="Connect"
-                android:textSize="12sp" />
-
-            <Button
                 android:id="@+id/followButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
                 android:text="Follow"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/measureButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="Meas"
                 android:textSize="12sp" />
 
             <Button
@@ -172,7 +199,7 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Map Layers"
+                android:text="GIS Menu"
                 android:textSize="18sp"
                 android:textStyle="bold"
                 android:paddingBottom="16dp" />
@@ -180,33 +207,62 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Base Map"
-                android:textStyle="bold"
-                android:paddingBottom="8dp" />
+                android:text="Layers"
+                android:textStyle="bold" />
 
             <RadioGroup
                 android:id="@+id/styleRadioGroup"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content" />
 
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="#CCCCCC"
-                android:layout_marginVertical="16dp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Overlays"
-                android:textStyle="bold"
-                android:paddingBottom="8dp" />
-
             <CheckBox
                 android:id="@+id/wmsCheckbox"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="WMS Layer" />
+                android:text="WMS Overlay" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginVertical="8dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Import Data"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/importCsvSide"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Import CSV"
+                android:textSize="10sp" />
+
+            <Button
+                android:id="@+id/importFileSide"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Import GeoJSON/SHP"
+                android:textSize="10sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginVertical="8dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="CRS Settings"
+                android:textStyle="bold" />
+
+            <Spinner
+                android:id="@+id/crsSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content" />
 
         </LinearLayout>
     </com.google.android.material.navigation.NavigationView>

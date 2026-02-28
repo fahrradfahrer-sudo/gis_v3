@@ -103,16 +103,20 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     override fun onNewData(data: ByteArray) {
+        // Run parsing on the I/O thread to avoid delaying the main thread
         try {
-            buffer.append(String(data, Charsets.US_ASCII))
-            var newlineIndex = buffer.indexOf("\n")
-            while (newlineIndex != -1) {
-                val sentence = buffer.substring(0, newlineIndex).trim()
-                buffer.delete(0, newlineIndex + 1)
-                if (sentence.startsWith("$")) parseNmea(sentence)
-                newlineIndex = buffer.indexOf("\n")
+            val str = String(data, Charsets.US_ASCII)
+            synchronized(buffer) {
+                buffer.append(str)
+                var newlineIndex = buffer.indexOf("\n")
+                while (newlineIndex != -1) {
+                    val sentence = buffer.substring(0, newlineIndex).trim()
+                    buffer.delete(0, newlineIndex + 1)
+                    if (sentence.startsWith("$")) parseNmea(sentence)
+                    newlineIndex = buffer.indexOf("\n")
+                }
+                if (buffer.length > 8192) buffer.setLength(0)
             }
-            if (buffer.length > 8192) buffer.setLength(0)
         } catch (e: Exception) {}
     }
 

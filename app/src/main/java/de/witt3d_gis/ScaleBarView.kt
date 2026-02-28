@@ -42,8 +42,8 @@ class ScaleBarView @JvmOverloads constructor(
         android.location.Location.distanceBetween(center.latitude, center.longitude, latLng2.latitude, latLng2.longitude, results)
         val metersPer100Pixels = results[0]
 
-        // Find a nice round number for the scale (e.g., 10m, 50m, 100m, 500m, 1km)
-        val niceDistances = doubleArrayOf(1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0)
+        // Find a nice round number for the scale (including cm and mm for very high zoom)
+        val niceDistances = doubleArrayOf(0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0)
         var scaleMeters = niceDistances[0]
         for (d in niceDistances) {
             if (metersPer100Pixels > d * 0.5) scaleMeters = d
@@ -60,7 +60,12 @@ class ScaleBarView @JvmOverloads constructor(
         canvas.drawLine(xStart, y, xStart, y - 10, paint)
         canvas.drawLine(xEnd, y, xEnd, y - 10, paint)
 
-        val text = if (scaleMeters >= 1000) "${(scaleMeters / 1000).toInt()} km" else "${scaleMeters.toInt()} m"
+        val text = when {
+            scaleMeters >= 1000 -> "${(scaleMeters / 1000).toInt()} km"
+            scaleMeters >= 1.0 -> "${scaleMeters.toInt()} m"
+            scaleMeters >= 0.01 -> "${(scaleMeters * 100).toInt()} cm"
+            else -> "${(scaleMeters * 1000).toInt()} mm"
+        }
         canvas.drawText(text, xStart + scaleWidthPixels / 2, y - 15, paint)
     }
 }

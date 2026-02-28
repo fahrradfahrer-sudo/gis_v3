@@ -25,6 +25,7 @@ import android.widget.LinearLayout
 import android.widget.CheckBox
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -79,6 +80,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var menuButton: Button
     private lateinit var styleRadioGroup: RadioGroup
     private lateinit var wmsCheckbox: CheckBox
+    private lateinit var rtkAgeText: TextView
+    private lateinit var baudSpinner: Spinner
+    private lateinit var measureButton: Button
+    private lateinit var crsSpinner: Spinner
 
     private lateinit var serialLocationManager: SerialLocationManager
     private lateinit var serialLocationEngine: SerialLocationEngine
@@ -89,6 +94,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private var isWmsEnabled = false
     private var pendingDevice: UsbDevice? = null
     private var isFirstFix = true
+    private var isMeasureMode = false
+    private val measurePoints = mutableListOf<LatLng>()
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
@@ -135,6 +142,16 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val navView = findViewById<NavigationView>(R.id.navigationView)
         styleRadioGroup = navView.findViewById(R.id.styleRadioGroup)
         wmsCheckbox = navView.findViewById(R.id.wmsCheckbox)
+        rtkAgeText = findViewById(R.id.rtkAgeText)
+        baudSpinner = findViewById<Spinner>(R.id.baudSpinner)
+        crsSpinner = navView.findViewById<Spinner>(R.id.crsSpinner)
+        measureButton = findViewById(R.id.measureButton)
+
+        setupBaudSpinner()
+        setupCrsSpinner()
+
+        navView.findViewById<Button>(R.id.importCsvSide).setOnClickListener { showImportDialog(); drawerLayout.closeDrawers() }
+        navView.findViewById<Button>(R.id.importFileSide).setOnClickListener { openFilePicker(); drawerLayout.closeDrawers() }
 
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
@@ -161,6 +178,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             this.map = mapObj
             mapView.addOnDidFailLoadingMapListener { error -> updateStatus("Map Error: $error") }
             mapObj.setMaxZoomPreference(25.5)
+
+            mapObj.addOnMapClickListener { latLng ->
+                if (isMeasureMode) {
+                    addMeasurePoint(latLng)
+                    true
+                } else false
+            }
+
             findViewById<ScaleBarView>(R.id.scaleBar).setMap(mapObj)
             loadStyle(mapStyles[0].second)
         }
@@ -197,6 +222,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             if (::map.isInitialized) map.animateCamera(CameraUpdateFactory.zoomOut())
         }
 
+        measureButton.setOnClickListener { toggleMeasureMode() }
+
         settingsButton.setOnClickListener { showSettingsDialog() }
 
         val filter = IntentFilter(ACTION_USB_PERMISSION)
@@ -209,6 +236,44 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         setupLayerMenu()
 
         checkLocationPermission()
+    }
+
+    private fun setupBaudSpinner() {
+        val bauds = listOf("9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600")
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, bauds)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        baudSpinner.adapter = adapter
+
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val saved = prefs.getString("baud", "115200")
+        val pos = bauds.indexOf(saved)
+        if (pos != -1) baudSpinner.setSelection(pos)
+
+        baudSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                prefs.edit().putString("baud", bauds[position]).apply()
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+    }
+
+    private fun setupCrsSpinner() {
+        val systems = listOf("WGS84 (Dec)", "WGS84 (DMS)", "Web Mercator")
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, systems)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        crsSpinner.adapter = adapter
+
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val saved = prefs.getInt("crs_pos", 0)
+        crsSpinner.setSelection(saved)
+
+        crsSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                prefs.edit().putInt("crs_pos", position).apply()
+                calculateMeasureResult() // Refresh current display
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
     }
 
     private fun setupLayerMenu() {
@@ -274,6 +339,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     val separator = if (finalWmsUrl.contains("?")) "&" else "?"
                     // We use WMS 1.1.1 parameters by default as they are most standard for Tile overlays
                     // Using 512 width/height for better detail at high zoom
+                    val userLayers = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getString("wms_layers", "") ?: ""
                     var params = "FORMAT=image/png&TRANSPARENT=TRUE&VERSION=1.1.1&SRS=EPSG:3857&WIDTH=512&HEIGHT=512&BBOX={bbox-epsg-3857}"
 
                     if (!finalWmsUrl.contains("REQUEST=", ignoreCase = true)) {
@@ -282,13 +348,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     if (!finalWmsUrl.contains("STYLES=", ignoreCase = true)) {
                         params += "&STYLES="
                     }
-                    if (!finalWmsUrl.contains("LAYERS=", ignoreCase = true)) {
-                        val userLayers = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getString("wms_layers", "") ?: ""
-                        if (userLayers.isNotEmpty()) {
-                            params += "&LAYERS=$userLayers"
-                        } else {
-                            updateStatus("WMS Warning: No Layers set")
-                        }
+
+                    // CRITICAL: Always use userLayers if present to avoid loading "all" layers or defaulting to 0
+                    if (userLayers.isNotEmpty()) {
+                        params += "&LAYERS=$userLayers"
+                    } else if (!finalWmsUrl.contains("LAYERS=", ignoreCase = true)) {
+                        params += "&LAYERS=0"
                     }
 
                     finalWmsUrl += separator + params
@@ -375,7 +440,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             setPadding(60, 40, 60, 10)
         }
 
-        val baudInput = EditText(this).apply { hint = "Baudrate"; setText(prefs.getString("baud", "115200")) }
         val hostInput = EditText(this).apply { hint = "NTRIP Host"; setText(prefs.getString("host", "")) }
         val portInput = EditText(this).apply { hint = "NTRIP Port"; setText(prefs.getString("port", "2101")) }
         val mountInput = EditText(this).apply { hint = "NTRIP Mount"; setText(prefs.getString("mount", "")) }
@@ -412,14 +476,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             setOnClickListener { openFilePicker() }
         }
 
-        layout.addView(baudInput); layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsRow); layout.addView(importButton); layout.addView(geojsonButton)
+        layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput); layout.addView(wmsInput); layout.addView(wmsRow)
 
         AlertDialog.Builder(this)
             .setTitle("Settings")
             .setView(layout)
             .setPositiveButton("Save & Start NTRIP") { _, _ ->
                 prefs.edit()
-                    .putString("baud", baudInput.text.toString().trim())
                     .putString("host", hostInput.text.toString().trim())
                     .putString("port", portInput.text.toString().trim())
                     .putString("mount", mountInput.text.toString().trim())
@@ -741,6 +804,85 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
     }
 
+    private fun toggleMeasureMode() {
+        isMeasureMode = !isMeasureMode
+        measureButton.text = if (isMeasureMode) "Stop" else "Meas"
+        if (!isMeasureMode) {
+            measurePoints.clear()
+            map.style?.let {
+                it.removeLayer("measure-line")
+                it.removeLayer("measure-points")
+                it.removeSource("measure-source")
+            }
+            updateStatus("Measure Mode Off")
+        } else {
+            updateStatus("Measure: Tap on map")
+        }
+    }
+
+    private fun addMeasurePoint(latLng: LatLng) {
+        measurePoints.add(latLng)
+        val features = measurePoints.map { Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude)) }
+        val lineFeature = if (measurePoints.size >= 2) {
+            Feature.fromGeometry(LineString.fromLngLats(measurePoints.map { Point.fromLngLat(it.longitude, it.latitude) }))
+        } else null
+
+        map.style?.let { style ->
+            style.removeLayer("measure-line")
+            style.removeLayer("measure-points")
+            style.removeSource("measure-source")
+
+            val source = GeoJsonSource("measure-source", FeatureCollection.fromFeatures(
+                if (lineFeature != null) features + lineFeature else features
+            ))
+            style.addSource(source)
+
+            style.addLayer(CircleLayer("measure-points", "measure-source").apply {
+                setProperties(PropertyFactory.circleRadius(5f), PropertyFactory.circleColor(Color.YELLOW))
+            })
+            if (lineFeature != null) {
+                style.addLayerBelow(LineLayer("measure-line", "measure-source").apply {
+                    setProperties(PropertyFactory.lineColor(Color.YELLOW), PropertyFactory.lineWidth(3f))
+                }, "measure-points")
+            }
+        }
+
+        calculateMeasureResult()
+    }
+
+    private fun calculateMeasureResult() {
+        if (measurePoints.isEmpty()) return
+        var dist = 0.0
+        for (i in 0 until measurePoints.size - 1) {
+            val results = FloatArray(1)
+            Location.distanceBetween(measurePoints[i].latitude, measurePoints[i].longitude, measurePoints[i+1].latitude, measurePoints[i+1].longitude, results)
+            dist += results[0]
+        }
+
+        var area = 0.0
+        if (measurePoints.size >= 3) {
+            // Very simplified area calculation for small areas
+            area = calculatePlanarArea(measurePoints)
+        }
+
+        val pos = measurePoints.last()
+        updateStatus("Dist: %.2fm, Area: %.2fm2, Pos: %.5f, %.5f".format(dist, area, pos.latitude, pos.longitude))
+    }
+
+    private fun calculatePlanarArea(points: List<LatLng>): Double {
+        if (points.size < 3) return 0.0
+        var area = 0.0
+        val radius = 6378137.0
+        for (i in points.indices) {
+            val j = (i + 1) % points.size
+            val p1 = points[i]
+            val p2 = points[j]
+            area += Math.toRadians(p2.longitude - p1.longitude) * (2.0 + Math.sin(Math.toRadians(p1.latitude)) + Math.sin(Math.toRadians(p2.latitude)))
+        }
+        area = area * radius * radius / 2.0
+        return Math.abs(area)
+    }
+
     private fun connectToSerial(device: UsbDevice) {
         val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
         val baud = prefs.getString("baud", "115200")?.toIntOrNull() ?: 115200
@@ -760,6 +902,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         runOnUiThread {
             fixStatusText.text = location.fixType ?: "No Fix"
             satCountText.text = "Sats: ${location.satellites ?: 0}"
+
+            // Simulating RTK Age for display (in real apps this comes from GGA)
+            rtkAgeText.text = "Age: 1.0s"
 
             val androidLocation = Location("gps").apply {
                 latitude = location.latitude
