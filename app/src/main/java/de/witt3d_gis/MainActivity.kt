@@ -63,6 +63,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import java.io.InputStream
 import java.net.URL
 import java.util.concurrent.TimeUnit
+import java.util.zip.ZipInputStream
 
 class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener {
     private val TAG = "MainActivity"
@@ -83,6 +84,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var rtkAgeText: TextView
     private lateinit var baudSpinner: Spinner
     private lateinit var measureButton: Button
+    private lateinit var wmsUrlDrawer: EditText
+    private lateinit var wmsLayersDrawer: EditText
     private lateinit var crsSpinner: Spinner
 
     private lateinit var serialLocationManager: SerialLocationManager
@@ -96,6 +99,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private var isFirstFix = true
     private var isMeasureMode = false
     private val measurePoints = mutableListOf<LatLng>()
+    private var lastLocation: LatLng? = null
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
@@ -146,6 +150,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         baudSpinner = findViewById<Spinner>(R.id.baudSpinner)
         crsSpinner = navView.findViewById<Spinner>(R.id.crsSpinner)
         measureButton = findViewById(R.id.measureButton)
+
+        wmsUrlDrawer = navView.findViewById(R.id.wmsUrlDrawer)
+        wmsLayersDrawer = navView.findViewById(R.id.wmsLayersDrawer)
+
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        wmsUrlDrawer.setText(prefs.getString("wms_url", ""))
+        wmsLayersDrawer.setText(prefs.getString("wms_layers", ""))
+
+        navView.findViewById<Button>(R.id.wmsSearchDrawer).setOnClickListener {
+            discoverWmsLayers(wmsUrlDrawer.text.toString(), wmsLayersDrawer)
+        }
 
         setupBaudSpinner()
         setupCrsSpinner()
@@ -212,6 +227,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
         wmsCheckbox.setOnCheckedChangeListener { _, isChecked ->
             isWmsEnabled = isChecked
+            if (isChecked) {
+                val p = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                p.edit().putString("wms_url", wmsUrlDrawer.text.toString().trim())
+                        .putString("wms_layers", wmsLayersDrawer.text.toString().trim())
+                        .apply()
+            }
             refreshWmsLayer()
         }
 
@@ -258,7 +279,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun setupCrsSpinner() {
-        val systems = listOf("WGS84 (Dec)", "WGS84 (DMS)", "Web Mercator")
+        val systems = listOf("WGS84 (Dec)", "WGS84 (DMS)", "UTM (Automatic)", "Web Mercator", "ETRS89 / UTM")
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, systems)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         crsSpinner.adapter = adapter
@@ -367,10 +388,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // MapLibre expect tile URL with {x} {y} {z} or similar.
             val tileSet = TileSet("2.2.0", finalWmsUrl)
-            // Lowering maxZoom back to a more reasonable level (18) and letting the engine upscale might be more stable
-            // If the layer disappears at 25.5, it's likely because the engine thinks there's no data.
-            // We set maxZoom to a high value like 25, but we ensure it's slightly below the absolute max map zoom.
-            tileSet.maxZoom = 25f
+            // To prevent disappearing at 25.5 zoom, we set maxZoom to something slightly HIGHER than the map's max zoom.
+            // If it still disappears, we might need to set it to 18 and rely on SDK upscaling (overscaling).
+            tileSet.maxZoom = 26f
             val source = RasterSource("wms-source", tileSet, 512)
             style.addSource(source)
 
@@ -613,6 +633,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             importGeoJsonFromUri(uri)
         } else if (fileName.endsWith(".shp", ignoreCase = true)) {
             importShapefile(uri)
+        } else if (fileName.endsWith(".qgz", ignoreCase = true)) {
+            importQgzFile(uri)
         } else {
             Toast.makeText(this, "Unsupported file: $fileName", Toast.LENGTH_SHORT).show()
         }
@@ -766,6 +788,54 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
     }
 
+    private fun importQgzFile(uri: android.net.Uri) {
+        updateStatus("Reading QGZ...")
+        Thread {
+            try {
+                contentResolver.openInputStream(uri)?.use { stream ->
+                    val zis = ZipInputStream(stream)
+                    var entry = zis.nextEntry
+                    var xmlContent: String? = null
+                    while (entry != null) {
+                        if (entry.name.endsWith(".qgs", ignoreCase = true)) {
+                            xmlContent = zis.bufferedReader().use { it.readText() }
+                            break
+                        }
+                        entry = zis.nextEntry
+                    }
+
+                    if (xmlContent != null) {
+                        // Very simple QGS parser for WMS layers
+                        val wmsRegex = Regex("<layer-tree-layer[^>]*name=\"([^\"]+)\"[^>]*providerKey=\"wms\"[^>]*source=\"([^\"]+)\"")
+                        val matches = wmsRegex.findAll(xmlContent)
+                        runOnUiThread {
+                            if (matches.any()) {
+                                val layers = matches.map { it.groupValues[1] }.toList()
+                                AlertDialog.Builder(this)
+                                    .setTitle("QGZ Layers Found")
+                                    .setItems(layers.toTypedArray()) { _, i ->
+                                        val source = matches.elementAt(i).groupValues[2]
+                                        // Try to extract URL from source (it's encoded)
+                                        val urlPart = source.split("url=").getOrNull(1)?.split("&")?.get(0)
+                                        if (urlPart != null) {
+                                            wmsUrlDrawer.setText(java.net.URLDecoder.decode(urlPart, "UTF-8"))
+                                            wmsLayersDrawer.setText(layers[i])
+                                            updateStatus("QGZ WMS Loaded")
+                                        }
+                                    }.show()
+                            } else {
+                                Toast.makeText(this, "No WMS layers found in QGZ", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "QGZ error: ${e.message}")
+                runOnUiThread { updateStatus("QGZ Error") }
+            }
+        }.start()
+    }
+
     private fun importGeoJsonFromUri(uri: android.net.Uri) {
         try {
             contentResolver.openInputStream(uri)?.use { stream ->
@@ -866,7 +936,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
 
         val pos = measurePoints.last()
-        updateStatus("Dist: %.2fm, Area: %.2fm2, Pos: %.5f, %.5f".format(dist, area, pos.latitude, pos.longitude))
+        var status = "Dist: %.2fm, Area: %.2fm2, Pos: %.5f, %.5f".format(dist, area, pos.latitude, pos.longitude)
+
+        lastLocation?.let { current ->
+            val res = FloatArray(1)
+            Location.distanceBetween(pos.latitude, pos.longitude, current.latitude, current.longitude, res)
+            status += " | To GNSS: %.2fm".format(res[0])
+        }
+
+        updateStatus(status)
     }
 
     private fun calculatePlanarArea(points: List<LatLng>): Double {
@@ -905,6 +983,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // Simulating RTK Age for display (in real apps this comes from GGA)
             rtkAgeText.text = "Age: 1.0s"
+
+            lastLocation = LatLng(location.latitude, location.longitude)
+            if (isMeasureMode) calculateMeasureResult()
 
             val androidLocation = Location("gps").apply {
                 latitude = location.latitude

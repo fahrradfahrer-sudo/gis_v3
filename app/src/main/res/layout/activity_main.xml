@@ -221,6 +221,37 @@
                 android:layout_height="wrap_content"
                 android:text="WMS Overlay" />
 
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="4dp">
+                <EditText
+                    android:id="@+id/wmsUrlDrawer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="WMS URL"
+                    android:textSize="10sp" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+                    <EditText
+                        android:id="@+id/wmsLayersDrawer"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:hint="Layers"
+                        android:textSize="10sp" />
+                    <Button
+                        android:id="@+id/wmsSearchDrawer"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="S"
+                        android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
@@ -244,7 +275,7 @@
                 android:id="@+id/importFileSide"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Import GeoJSON/SHP"
+                android:text="Import GIS File (.shp/.json/.qgz)"
                 android:textSize="10sp" />
 
             <View

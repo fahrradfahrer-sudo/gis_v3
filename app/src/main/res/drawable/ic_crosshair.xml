@@ -13,7 +13,7 @@
         android:strokeWidth="1.2"
         android:pathData="M16,16 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
 
-    <!-- Cross lines with gaps -->
+    <!-- Cross lines with gaps (Removed center dot) -->
     <path
         android:strokeColor="#000000"
         android:strokeWidth="1.5"
@@ -22,9 +22,4 @@
         android:strokeColor="#FF0000"
         android:strokeWidth="1.2"
         android:pathData="M16,2.5 L16,9.5 M16,22.5 L16,29.5 M2.5,16 L9.5,16 M22.5,16 L29.5,16" />
-
-    <!-- Center Dot -->
-    <path
-        android:fillColor="#FF0000"
-        android:pathData="M16,16 m-1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0" />
 </vector>
