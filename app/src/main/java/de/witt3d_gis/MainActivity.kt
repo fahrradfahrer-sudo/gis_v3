@@ -45,6 +45,8 @@ import org.maplibre.android.location.LocationComponentOptions
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.CircleLayer
+import org.maplibre.android.style.layers.FillLayer
+import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.layers.SymbolLayer
@@ -300,7 +302,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // MapLibre expect tile URL with {x} {y} {z} or similar.
             val tileSet = TileSet("2.2.0", finalWmsUrl)
-            // Setting high maxZoom for TileSet prevents the SDK from over-scaling symbols too early
+            // Lowering maxZoom back to a more reasonable level (18) and letting the engine upscale might be more stable
+            // If the layer disappears at 25.5, it's likely because the engine thinks there's no data.
+            // We set maxZoom to a high value like 25, but we ensure it's slightly below the absolute max map zoom.
             tileSet.maxZoom = 25f
             val source = RasterSource("wms-source", tileSet, 512)
             style.addSource(source)
@@ -571,7 +575,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun importShapefile(uri: android.net.Uri) {
-        Toast.makeText(this, "SHP import: Point features only", Toast.LENGTH_SHORT).show()
         updateStatus("Reading SHP...")
         Thread {
             try {
@@ -599,23 +602,46 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
                         val type = (bytes[dataStart].toInt() and 0xFF) or ((bytes[dataStart+1].toInt() and 0xFF) shl 8)
 
-                        if (type == 1) { // Point
-                            if (dataStart + 20 <= bytes.size) {
-                                val x = java.nio.ByteBuffer.wrap(bytes, dataStart + 4, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).double
-                                val y = java.nio.ByteBuffer.wrap(bytes, dataStart + 12, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).double
+                        when (type) {
+                            1 -> { // Point
+                                if (dataStart + 20 <= bytes.size) {
+                                    val x = java.nio.ByteBuffer.wrap(bytes, dataStart + 4, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).double
+                                    val y = java.nio.ByteBuffer.wrap(bytes, dataStart + 12, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).double
+                                    features.add(Feature.fromGeometry(Point.fromLngLat(x, y)).apply { addStringProperty("name", "Pt ${++count}") })
+                                }
+                            }
+                            3, 5 -> { // PolyLine or Polygon
+                                if (dataStart + 44 <= bytes.size) {
+                                    val numParts = java.nio.ByteBuffer.wrap(bytes, dataStart + 36, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+                                    val numPoints = java.nio.ByteBuffer.wrap(bytes, dataStart + 40, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
 
-                                val feature = Feature.fromGeometry(Point.fromLngLat(x, y))
-                                feature.addStringProperty("name", "SHP Pt ${++count}")
-                                features.add(feature)
+                                    val partsOffset = dataStart + 44
+                                    val pointsOffset = partsOffset + (numParts * 4)
+
+                                    if (pointsOffset + (numPoints * 16) <= bytes.size) {
+                                        val parts = IntArray(numParts) { i -> java.nio.ByteBuffer.wrap(bytes, partsOffset + (i * 4), 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int }
+                                        val allPoints = mutableListOf<Point>()
+                                        for (i in 0 until numPoints) {
+                                            val px = java.nio.ByteBuffer.wrap(bytes, pointsOffset + (i * 16), 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).double
+                                            val py = java.nio.ByteBuffer.wrap(bytes, pointsOffset + (i * 16) + 8, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).double
+                                            allPoints.add(Point.fromLngLat(px, py))
+                                        }
+
+                                        if (type == 3) {
+                                            features.add(Feature.fromGeometry(LineString.fromLngLats(allPoints)).apply { addStringProperty("name", "Line ${++count}") })
+                                        } else {
+                                            features.add(Feature.fromGeometry(Polygon.fromLngLats(listOf(allPoints))).apply { addStringProperty("name", "Poly ${++count}") })
+                                        }
+                                    }
+                                }
                             }
                         }
-
                         pos += 8 + (contentLength * 2)
                     }
 
                     runOnUiThread {
                         if (features.isNotEmpty()) displayImportedFeatures(features, "SHP")
-                        else Toast.makeText(this@MainActivity, "No Points found in SHP", Toast.LENGTH_SHORT).show()
+                        else Toast.makeText(this@MainActivity, "No compatible geometries found in SHP", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: Exception) {
@@ -629,12 +655,31 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         map.style?.let { style ->
             style.removeLayer("import-circle-layer")
             style.removeLayer("import-label-layer")
+            style.removeLayer("import-line-layer")
+            style.removeLayer("import-fill-layer")
             style.removeLayer("import-layer")
             style.removeSource("import-source")
 
             val source = GeoJsonSource("import-source", FeatureCollection.fromFeatures(features))
             style.addSource(source)
 
+            // Polygon fill
+            val fillLayer = FillLayer("import-fill-layer", "import-source")
+            fillLayer.setProperties(
+                PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
+                PropertyFactory.fillOutlineColor(Color.RED)
+            )
+            style.addLayer(fillLayer)
+
+            // Line layer
+            val lineLayer = LineLayer("import-line-layer", "import-source")
+            lineLayer.setProperties(
+                PropertyFactory.lineColor(Color.RED),
+                PropertyFactory.lineWidth(2f)
+            )
+            style.addLayer(lineLayer)
+
+            // Circle for points
             val circleLayer = CircleLayer("import-circle-layer", "import-source")
             circleLayer.setProperties(
                 PropertyFactory.circleRadius(3f),
