@@ -26,6 +26,7 @@ import android.widget.CheckBox
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.Spinner
+import androidx.appcompat.widget.SwitchCompat
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -62,6 +63,8 @@ import org.maplibre.geojson.Polygon
 import androidx.activity.result.contract.ActivityResultContracts
 import java.io.InputStream
 import java.net.URL
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 
@@ -84,6 +87,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var rtkAgeText: TextView
     private lateinit var baudSpinner: Spinner
     private lateinit var measureButton: Button
+    private lateinit var scaleBar: ScaleBarView
     private lateinit var wmsUrlDrawer: EditText
     private lateinit var wmsLayersDrawer: EditText
     private lateinit var crsSpinner: Spinner
@@ -91,6 +95,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var serialLocationManager: SerialLocationManager
     private lateinit var serialLocationEngine: SerialLocationEngine
     private lateinit var ntripManager: NtripManager
+    private val executor: ExecutorService = Executors.newCachedThreadPool()
 
     private var isSerialConnected = false
     private var isNtripActive = false
@@ -100,12 +105,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private var isMeasureMode = false
     private val measurePoints = mutableListOf<LatLng>()
     private var lastLocation: LatLng? = null
+    private var currentFeatures = listOf<Feature>()
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { handleImportedFile(it) }
+    }
+
+    private val exportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/geo+json")) { uri ->
+        uri?.let { exportDataToUri(it) }
     }
 
     private val mapStyles = listOf(
@@ -150,6 +160,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         baudSpinner = findViewById<Spinner>(R.id.baudSpinner)
         crsSpinner = navView.findViewById<Spinner>(R.id.crsSpinner)
         measureButton = findViewById(R.id.measureButton)
+        scaleBar = findViewById(R.id.scaleBar)
 
         wmsUrlDrawer = navView.findViewById(R.id.wmsUrlDrawer)
         wmsLayersDrawer = navView.findViewById(R.id.wmsLayersDrawer)
@@ -167,6 +178,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
         navView.findViewById<Button>(R.id.importCsvSide).setOnClickListener { showImportDialog(); drawerLayout.closeDrawers() }
         navView.findViewById<Button>(R.id.importFileSide).setOnClickListener { openFilePicker(); drawerLayout.closeDrawers() }
+        navView.findViewById<Button>(R.id.exportDataSide).setOnClickListener { startExport(); drawerLayout.closeDrawers() }
+
+        navView.findViewById<SwitchCompat>(R.id.scaleModeSwitch).setOnCheckedChangeListener { _, isChecked ->
+            scaleBar.isRelativeMode = isChecked
+        }
 
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
@@ -388,9 +404,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // MapLibre expect tile URL with {x} {y} {z} or similar.
             val tileSet = TileSet("2.2.0", finalWmsUrl)
-            // To prevent disappearing at 25.5 zoom, we set maxZoom to something slightly HIGHER than the map's max zoom.
-            // If it still disappears, we might need to set it to 18 and rely on SDK upscaling (overscaling).
-            tileSet.maxZoom = 26f
+            // Setting maxZoom to 30 ensures tiles are always requested or over-scaled,
+            // preventing the layer from disappearing at extreme scales like 20cm.
+            tileSet.maxZoom = 30f
             val source = RasterSource("wms-source", tileSet, 512)
             style.addSource(source)
 
@@ -635,6 +651,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             importShapefile(uri)
         } else if (fileName.endsWith(".qgz", ignoreCase = true)) {
             importQgzFile(uri)
+        } else if (fileName.endsWith(".kml", ignoreCase = true)) {
+            importKmlFile(uri)
         } else {
             Toast.makeText(this, "Unsupported file: $fileName", Toast.LENGTH_SHORT).show()
         }
@@ -736,7 +754,31 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }.start()
     }
 
+    private fun startExport() {
+        if (currentFeatures.isEmpty()) {
+            Toast.makeText(this, "No data to export", Toast.LENGTH_SHORT).show()
+            return
+        }
+        exportPicker.launch("export_data_${System.currentTimeMillis()}.geojson")
+    }
+
+    private fun exportDataToUri(uri: android.net.Uri) {
+        executor.submit {
+            try {
+                val collection = FeatureCollection.fromFeatures(currentFeatures)
+                contentResolver.openOutputStream(uri)?.use { stream ->
+                    stream.write(collection.toJson().toByteArray())
+                }
+                runOnUiThread { Toast.makeText(this, "Export successful", Toast.LENGTH_SHORT).show() }
+            } catch (e: Exception) {
+                Log.e(TAG, "Export error: ${e.message}")
+                runOnUiThread { Toast.makeText(this, "Export failed", Toast.LENGTH_SHORT).show() }
+            }
+        }
+    }
+
     private fun displayImportedFeatures(features: List<Feature>, sourceName: String) {
+        currentFeatures = features
         map.style?.let { style ->
             style.removeLayer("import-circle-layer")
             style.removeLayer("import-label-layer")
@@ -834,6 +876,47 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 runOnUiThread { updateStatus("QGZ Error") }
             }
         }.start()
+    }
+
+    private fun importKmlFile(uri: android.net.Uri) {
+        updateStatus("Reading KML...")
+        executor.submit {
+            try {
+                contentResolver.openInputStream(uri)?.use { stream ->
+                    val kml = stream.bufferedReader().use { it.readText() }
+                    val features = mutableListOf<Feature>()
+
+                    // Basic KML point parser
+                    val placemarkRegex = Regex("<Placemark[^>]*>([\\s\\S]*?)</Placemark>")
+                    val nameRegex = Regex("<name>([^<]+)</name>")
+                    val coordRegex = Regex("<coordinates>([^<]+)</coordinates>")
+
+                    placemarkRegex.findAll(kml).forEach { match ->
+                        val content = match.groupValues[1]
+                        val name = nameRegex.find(content)?.groupValues?.get(1) ?: "KML Pt"
+                        val coordStr = coordRegex.find(content)?.groupValues?.get(1)
+                        if (coordStr != null) {
+                            val parts = coordStr.trim().split(",")
+                            if (parts.size >= 2) {
+                                val lon = parts[0].trim().toDouble()
+                                val lat = parts[1].trim().toDouble()
+                                features.add(Feature.fromGeometry(Point.fromLngLat(lon, lat)).apply {
+                                    addStringProperty("name", name)
+                                })
+                            }
+                        }
+                    }
+
+                    runOnUiThread {
+                        if (features.isNotEmpty()) displayImportedFeatures(features, "KML")
+                        else Toast.makeText(this, "No valid Placemarks found in KML", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "KML error: ${e.message}")
+                runOnUiThread { updateStatus("KML Error") }
+            }
+        }
     }
 
     private fun importGeoJsonFromUri(uri: android.net.Uri) {
@@ -962,14 +1045,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun connectToSerial(device: UsbDevice) {
-        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        val baud = prefs.getString("baud", "115200")?.toIntOrNull() ?: 115200
+        val baudString = baudSpinner.selectedItem?.toString() ?: "115200"
+        val baud = baudString.toIntOrNull() ?: 115200
         updateStatus("Connecting...")
-        Thread {
+
+        // Ensure connection happens on a background thread
+        executor.submit {
             try {
                 serialLocationManager.connect(device, baud)
-            } catch (e: Exception) { Log.e(TAG, "Connect error: ${e.message}") }
-        }.start()
+            } catch (e: Exception) {
+                Log.e(TAG, "Connect error: ${e.message}")
+                runOnUiThread { updateStatus("Conn Error: ${e.message}") }
+            }
+        }
     }
 
     override fun onGgaReceived(sentence: String) {

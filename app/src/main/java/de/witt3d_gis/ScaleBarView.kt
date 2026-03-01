@@ -13,6 +13,11 @@ class ScaleBarView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     private var map: MapLibreMap? = null
+    var isRelativeMode: Boolean = false
+        set(value) {
+            field = value
+            invalidate()
+        }
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.BLACK
         strokeWidth = 4f
@@ -60,11 +65,16 @@ class ScaleBarView @JvmOverloads constructor(
         canvas.drawLine(xStart, y, xStart, y - 10, paint)
         canvas.drawLine(xEnd, y, xEnd, y - 10, paint)
 
-        val text = when {
-            scaleMeters >= 1000 -> "${(scaleMeters / 1000).toInt()} km"
-            scaleMeters >= 1.0 -> "${scaleMeters.toInt()} m"
-            scaleMeters >= 0.01 -> "${(scaleMeters * 100).toInt()} cm"
-            else -> "${(scaleMeters * 1000).toInt()} mm"
+        val text = if (isRelativeMode) {
+            val scale = (metersPer100Pixels / (100.0 / 96.0 * 0.0254)) // Very rough DPI scale estimation
+            "1:${scale.toInt()}"
+        } else {
+            when {
+                scaleMeters >= 1000 -> "${(scaleMeters / 1000).toInt()} km"
+                scaleMeters >= 1.0 -> "${scaleMeters.toInt()} m"
+                scaleMeters >= 0.01 -> "${(scaleMeters * 100).toInt()} cm"
+                else -> "${(scaleMeters * 1000).toInt()} mm"
+            }
         }
         canvas.drawText(text, xStart + scaleWidthPixels / 2, y - 15, paint)
     }

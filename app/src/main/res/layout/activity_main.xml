@@ -275,7 +275,14 @@
                 android:id="@+id/importFileSide"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Import GIS File (.shp/.json/.qgz)"
+                android:text="Import GIS File (.shp/.json/.qgz/.kml)"
+                android:textSize="10sp" />
+
+            <Button
+                android:id="@+id/exportDataSide"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Export Data (GeoJSON)"
                 android:textSize="10sp" />
 
             <View
@@ -287,8 +294,15 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="CRS Settings"
+                android:text="Display Settings"
                 android:textStyle="bold" />
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/scaleModeSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Relative Scale (1:X)"
+                android:textSize="10sp" />
 
             <Spinner
                 android:id="@+id/crsSpinner"
