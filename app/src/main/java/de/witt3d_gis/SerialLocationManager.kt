@@ -10,6 +10,8 @@ import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.hoho.android.usbserial.util.SerialInputOutputManager
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 data class SerialLocation(
     val latitude: Double,
@@ -30,7 +32,9 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    private val sentenceQueue = LinkedBlockingQueue<String>()
     private var buffer = StringBuilder()
+    private var isProcessing = false
 
     interface LocationListener {
         fun onLocationUpdate(location: SerialLocation)
@@ -68,10 +72,28 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 usbIoManager = SerialInputOutputManager(usbSerialPort, this)
                 executor.submit(usbIoManager)
 
+                isProcessing = true
+                startProcessingWorker()
+
                 mainHandler.post { listener?.onConnected() }
             } catch (e: Exception) {
                 Log.e(TAG, "Connection error", e)
                 sendError("Connection error: ${e.message}")
+            }
+        }
+    }
+
+    private fun startProcessingWorker() {
+        executor.submit {
+            while (isProcessing) {
+                try {
+                    val sentence = sentenceQueue.poll(500, TimeUnit.MILLISECONDS)
+                    if (sentence != null) {
+                        parseNmea(sentence)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Worker error", e)
+                }
             }
         }
     }
@@ -96,6 +118,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     fun disconnect() {
+        isProcessing = false
         usbIoManager?.stop()
         usbIoManager = null
         try { usbSerialPort?.close() } catch (e: Exception) {}
@@ -109,32 +132,27 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     override fun onNewData(data: ByteArray) {
-        // Just store the data and parse it in a controlled way to avoid threading issues
         try {
             val str = String(data, Charsets.US_ASCII)
             synchronized(buffer) {
-                if (buffer.length > 32768) buffer.setLength(0) // Prevent OOM if never cleared
+                if (buffer.length > 16384) buffer.setLength(0)
                 buffer.append(str)
-                processBuffer()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Data Error", e)
-        }
-    }
 
-    private fun processBuffer() {
-        var newlineIndex = buffer.indexOf("\n")
-        while (newlineIndex != -1) {
-            val sentence = buffer.substring(0, newlineIndex).trim()
-            buffer.delete(0, newlineIndex + 1)
-            if (sentence.isNotEmpty() && sentence.startsWith("$")) {
-                try {
-                    parseNmea(sentence)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Parse Error in sentence: $sentence", e)
+                var newlineIndex = buffer.indexOf("\n")
+                while (newlineIndex != -1) {
+                    // Safety check to avoid index out of bounds if string changed between index search and substring
+                    if (newlineIndex < buffer.length) {
+                        val sentence = buffer.substring(0, newlineIndex).trim()
+                        buffer.delete(0, newlineIndex + 1)
+                        if (sentence.startsWith("$")) {
+                            sentenceQueue.offer(sentence)
+                        }
+                    } else break
+                    newlineIndex = buffer.indexOf("\n")
                 }
             }
-            newlineIndex = buffer.indexOf("\n")
+        } catch (e: Exception) {
+            Log.e(TAG, "NMEA Buffer Error", e)
         }
     }
 

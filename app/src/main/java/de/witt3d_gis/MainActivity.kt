@@ -143,10 +143,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         super.onCreate(savedInstanceState)
 
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            Log.e(TAG, "Uncaught Exception in ${thread.name}", throwable)
+            val stackTrace = Log.getStackTraceString(throwable)
+            Log.e(TAG, "Uncaught Exception in ${thread.name}\n$stackTrace")
             runOnUiThread {
                 Toast.makeText(this, "Crash: ${throwable.message}", Toast.LENGTH_LONG).show()
-                updateStatus("CRASH: ${throwable.message}")
+                updateStatus("CRASH: ${throwable.message} (See Logs)")
             }
         }
 
@@ -223,7 +224,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView.getMapAsync { mapObj ->
             this.map = mapObj
             mapView.addOnDidFailLoadingMapListener { error -> updateStatus("Map Error: $error") }
-            mapObj.setMaxZoomPreference(28.0)
+            mapObj.setMaxZoomPreference(32.0)
 
             mapObj.addOnMapClickListener { latLng ->
                 if (isMeasureMode) {
@@ -421,11 +422,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val tileSet = TileSet("2.2.0", finalWmsUrl)
             // Setting maxZoom to a very high value (35) ensures the engine keeps the layer active even at 1:1 scale.
             tileSet.maxZoom = 35f
-            val source = RasterSource("wms-source", tileSet, 256) // Smaller tiles can be more reliable for high-zoom BBOX
+            val source = RasterSource("wms-source", tileSet, 128) // Smaller tiles = larger symbols
             style.addSource(source)
 
             val wmsLayer = RasterLayer("wms-layer", "wms-source")
-            wmsLayer.setProperties(PropertyFactory.rasterOpacity(1.0f))
+            wmsLayer.setProperties(
+                PropertyFactory.rasterOpacity(1.0f),
+                PropertyFactory.rasterResampling(org.maplibre.android.style.layers.Property.RASTER_RESAMPLING_NEAREST)
+            )
             wmsLayer.setMaxZoom(35f) // Explicitly set layer max zoom to 35
 
             // Try to find a good place for the layer - ideally above the background but below labels
@@ -1001,16 +1005,28 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
                     placemarkRegex.findAll(kml).forEach { match ->
                         val content = match.groupValues[1]
-                        val name = nameRegex.find(content)?.groupValues?.get(1) ?: "KML Pt"
-                        val coordStr = coordRegex.find(content)?.groupValues?.get(1)
-                        if (coordStr != null) {
-                            val parts = coordStr.trim().split(",")
-                            if (parts.size >= 2) {
-                                val lon = parts[0].trim().toDouble()
-                                val lat = parts[1].trim().toDouble()
-                                features.add(Feature.fromGeometry(Point.fromLngLat(lon, lat)).apply {
-                                    addStringProperty("name", name)
-                                })
+                        val name = nameRegex.find(content)?.groupValues?.get(1) ?: "KML"
+
+                        // Parse Points
+                        coordRegex.find(content)?.groupValues?.get(1)?.let { coordStr ->
+                            val parts = coordStr.trim().split(Regex("\\s+"))
+                            if (parts.size == 1) {
+                                val latLon = parts[0].split(",")
+                                if (latLon.size >= 2) {
+                                    features.add(Feature.fromGeometry(Point.fromLngLat(latLon[0].trim().toDouble(), latLon[1].trim().toDouble())).apply { addStringProperty("name", name) })
+                                }
+                            } else if (parts.size > 1) {
+                                val pts = parts.mapNotNull {
+                                    val ll = it.split(",")
+                                    if (ll.size >= 2) Point.fromLngLat(ll[0].trim().toDouble(), ll[1].trim().toDouble()) else null
+                                }
+                                if (pts.isNotEmpty()) {
+                                    if (content.contains("<LineString")) {
+                                        features.add(Feature.fromGeometry(LineString.fromLngLats(pts)).apply { addStringProperty("name", name) })
+                                    } else if (content.contains("<Polygon")) {
+                                        features.add(Feature.fromGeometry(Polygon.fromLngLats(listOf(pts))).apply { addStringProperty("name", name) })
+                                    }
+                                }
                             }
                         }
                     }
