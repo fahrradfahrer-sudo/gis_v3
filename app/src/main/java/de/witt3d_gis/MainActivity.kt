@@ -141,6 +141,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            Log.e(TAG, "Uncaught Exception in ${thread.name}", throwable)
+            runOnUiThread {
+                Toast.makeText(this, "Crash: ${throwable.message}", Toast.LENGTH_LONG).show()
+                updateStatus("CRASH: ${throwable.message}")
+            }
+        }
+
         MapLibre.getInstance(this)
         setContentView(R.layout.activity_main)
 
@@ -214,7 +223,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView.getMapAsync { mapObj ->
             this.map = mapObj
             mapView.addOnDidFailLoadingMapListener { error -> updateStatus("Map Error: $error") }
-            mapObj.setMaxZoomPreference(25.5)
+            mapObj.setMaxZoomPreference(28.0)
 
             mapObj.addOnMapClickListener { latLng ->
                 if (isMeasureMode) {
@@ -410,15 +419,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // MapLibre expect tile URL with {x} {y} {z} or similar.
             val tileSet = TileSet("2.2.0", finalWmsUrl)
-            // Setting maxZoom to 32 ensures tiles are always requested or over-scaled,
-            // preventing the layer from disappearing at extreme scales like 20cm.
-            tileSet.maxZoom = 32f
-            val source = RasterSource("wms-source", tileSet, 512)
+            // Setting maxZoom to a very high value (35) ensures the engine keeps the layer active even at 1:1 scale.
+            tileSet.maxZoom = 35f
+            val source = RasterSource("wms-source", tileSet, 256) // Smaller tiles can be more reliable for high-zoom BBOX
             style.addSource(source)
 
             val wmsLayer = RasterLayer("wms-layer", "wms-source")
             wmsLayer.setProperties(PropertyFactory.rasterOpacity(1.0f))
-            wmsLayer.setMaxZoom(32f) // Explicitly set layer max zoom
+            wmsLayer.setMaxZoom(35f) // Explicitly set layer max zoom to 35
 
             // Try to find a good place for the layer - ideally above the background but below labels
             val layers = style.layers

@@ -109,21 +109,33 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     override fun onNewData(data: ByteArray) {
-        // Run parsing on the I/O thread to avoid delaying the main thread
+        // Just store the data and parse it in a controlled way to avoid threading issues
         try {
             val str = String(data, Charsets.US_ASCII)
             synchronized(buffer) {
+                if (buffer.length > 32768) buffer.setLength(0) // Prevent OOM if never cleared
                 buffer.append(str)
-                var newlineIndex = buffer.indexOf("\n")
-                while (newlineIndex != -1) {
-                    val sentence = buffer.substring(0, newlineIndex).trim()
-                    buffer.delete(0, newlineIndex + 1)
-                    if (sentence.startsWith("$")) parseNmea(sentence)
-                    newlineIndex = buffer.indexOf("\n")
-                }
-                if (buffer.length > 8192) buffer.setLength(0)
+                processBuffer()
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "Data Error", e)
+        }
+    }
+
+    private fun processBuffer() {
+        var newlineIndex = buffer.indexOf("\n")
+        while (newlineIndex != -1) {
+            val sentence = buffer.substring(0, newlineIndex).trim()
+            buffer.delete(0, newlineIndex + 1)
+            if (sentence.isNotEmpty() && sentence.startsWith("$")) {
+                try {
+                    parseNmea(sentence)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Parse Error in sentence: $sentence", e)
+                }
+            }
+            newlineIndex = buffer.indexOf("\n")
+        }
     }
 
     override fun onRunError(e: Exception) {
@@ -172,7 +184,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     private fun parseLatitude(latStr: String, hemisphere: String): Double? {
-        if (latStr.length < 4) return null
+        if (latStr.isEmpty() || latStr.length < 4) return null
         return try {
             val deg = latStr.substring(0, 2).toDouble()
             val min = latStr.substring(2).toDouble()
@@ -183,7 +195,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     private fun parseLongitude(lonStr: String, hemisphere: String): Double? {
-        if (lonStr.length < 5) return null
+        if (lonStr.isEmpty() || lonStr.length < 5) return null
         return try {
             val deg = lonStr.substring(0, 3).toDouble()
             val min = lonStr.substring(3).toDouble()
