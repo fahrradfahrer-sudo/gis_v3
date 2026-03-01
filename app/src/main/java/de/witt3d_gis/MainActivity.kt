@@ -410,15 +410,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // MapLibre expect tile URL with {x} {y} {z} or similar.
             val tileSet = TileSet("2.2.0", finalWmsUrl)
-            // Setting maxZoom to 30 ensures tiles are always requested or over-scaled,
+            // Setting maxZoom to 32 ensures tiles are always requested or over-scaled,
             // preventing the layer from disappearing at extreme scales like 20cm.
-            tileSet.maxZoom = 30f
+            tileSet.maxZoom = 32f
             val source = RasterSource("wms-source", tileSet, 512)
             style.addSource(source)
 
             val wmsLayer = RasterLayer("wms-layer", "wms-source")
             wmsLayer.setProperties(PropertyFactory.rasterOpacity(1.0f))
-            wmsLayer.setMaxZoom(30f) // Explicitly set layer max zoom
+            wmsLayer.setMaxZoom(32f) // Explicitly set layer max zoom
 
             // Try to find a good place for the layer - ideally above the background but below labels
             val layers = style.layers
@@ -767,14 +767,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             Toast.makeText(this, "No data to export", Toast.LENGTH_SHORT).show()
             return
         }
-        val formats = arrayOf("GeoJSON (.json)", "KML (.kml)", "QGZ (.qgz)")
+        val formats = arrayOf("GeoJSON (.json)", "KML (.kml)", "QGZ (.qgz)", "Shapefile (.shp)")
         AlertDialog.Builder(this)
             .setTitle("Select Export Format")
             .setItems(formats) { _, i ->
                 lastExportFormat = when(i) {
                     0 -> "geojson"
                     1 -> "kml"
-                    else -> "qgz"
+                    2 -> "qgz"
+                    else -> "shp"
                 }
                 val ext = if (lastExportFormat == "geojson") "json" else lastExportFormat
                 exportPicker.launch("export_data_${System.currentTimeMillis()}.$ext")
@@ -792,6 +793,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         }
                         "kml" -> stream.write(generateKml(currentFeatures).toByteArray())
                         "qgz" -> generateQgz(currentFeatures, stream)
+                        "shp" -> writeShpPoints(currentFeatures, stream)
                     }
                 }
                 runOnUiThread { Toast.makeText(this, "Export successful", Toast.LENGTH_SHORT).show() }
@@ -821,10 +823,58 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private fun generateQgz(features: List<Feature>, out: java.io.OutputStream) {
         val zos = java.util.zip.ZipOutputStream(out)
         zos.putNextEntry(java.util.zip.ZipEntry("project.qgs"))
-        val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<qgis version=\"3.22.0\"></qgis>" // Placeholder
+        val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<qgis version=\"3.22.0\">\n" +
+                  "<projectlayers>\n" +
+                  "<maplayer type=\"vector\" name=\"Exported Features\">\n" +
+                  "</maplayer>\n" +
+                  "</projectlayers>\n" +
+                  "</qgis>"
         zos.write(xml.toByteArray())
         zos.closeEntry()
         zos.close()
+    }
+
+    private fun writeShpPoints(features: List<Feature>, out: java.io.OutputStream) {
+        val bb = java.nio.ByteBuffer.allocate(1024 * 1024).order(java.nio.ByteOrder.BIG_ENDIAN)
+        // Header
+        bb.putInt(9994) // Magic
+        bb.putInt(0); bb.putInt(0); bb.putInt(0); bb.putInt(0); bb.putInt(0) // Unused
+        val sizePos = bb.position()
+        bb.putInt(0) // File length placeholder
+        bb.putInt(1000) // Version 1000
+        bb.putInt(1) // Type 1 (Point)
+
+        // Bounds (WGS84)
+        bb.putDouble(-180.0); bb.putDouble(-90.0); bb.putDouble(180.0); bb.putDouble(90.0)
+        bb.putDouble(0.0); bb.putDouble(0.0); bb.putDouble(0.0); bb.putDouble(0.0)
+
+        var count = 0
+        features.forEach { f ->
+            val geom = f.geometry()
+            if (geom is Point) {
+                count++
+                val p = geom as Point
+                bb.putInt(count) // Record number
+                bb.putInt(10) // Content length (10 words = 20 bytes)
+
+                bb.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                bb.putInt(1) // Type Point
+                bb.putDouble(p.longitude())
+                bb.putDouble(p.latitude())
+                bb.order(java.nio.ByteOrder.BIG_ENDIAN)
+            }
+        }
+
+        val finalSize = bb.position()
+        bb.putInt(sizePos, finalSize / 2)
+        out.write(bb.array(), 0, finalSize)
+    }
+
+    private fun java.nio.ByteBuffer.putInt(pos: Int, value: Int) {
+        val old = position()
+        position(pos)
+        putInt(value)
+        position(old)
     }
 
     private fun displayImportedFeatures(features: List<Feature>, sourceName: String) {
@@ -1100,14 +1150,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val baud = baudString.toIntOrNull() ?: 115200
         updateStatus("Connecting...")
 
-        // Ensure connection happens on a background thread
-        executor.submit {
-            try {
-                serialLocationManager.connect(device, baud)
-            } catch (e: Exception) {
-                Log.e(TAG, "Connect error: ${e.message}")
-                runOnUiThread { updateStatus("Conn Error: ${e.message}") }
-            }
+        try {
+            serialLocationManager.connect(device, baud)
+        } catch (e: Exception) {
+            Log.e(TAG, "Connect error: ${e.message}")
+            updateStatus("Conn Error: ${e.message}")
         }
     }
 
@@ -1120,8 +1167,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             fixStatusText.text = location.fixType ?: "No Fix"
             satCountText.text = "Sats: ${location.satellites ?: 0}"
 
-            // Simulating RTK Age for display (in real apps this comes from GGA)
-            rtkAgeText.text = "Age: 1.0s"
+            val ageStr = if (location.rtkAge != null) "${location.rtkAge}s" else "-"
+            rtkAgeText.text = "Age: $ageStr"
 
             lastLocation = LatLng(location.latitude, location.longitude)
             if (isMeasureMode) calculateMeasureResult()

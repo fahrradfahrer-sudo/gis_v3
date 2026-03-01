@@ -18,6 +18,7 @@ data class SerialLocation(
     val accuracy: Float? = null,
     val satellites: Int? = null,
     val fixType: String? = null,
+    val rtkAge: Double? = null,
     val time: Long = System.currentTimeMillis()
 )
 
@@ -52,21 +53,26 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     fun connect(device: UsbDevice, baudRate: Int = 115200) {
-        try {
-            val driver = UsbSerialProber.getDefaultProber().probeDevice(device) ?: return
-            val connection = usbManager.openDevice(driver.device) ?: return
-            val port = driver.ports[0]
+        executor.submit {
+            try {
+                val driver = UsbSerialProber.getDefaultProber().probeDevice(device) ?: throw Exception("Driver not found")
+                if (driver.ports.isEmpty()) throw Exception("No ports available")
 
-            port.open(connection)
-            port.setParameters(baudRate, UsbSerialPort.DATABITS_8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                val connection = usbManager.openDevice(driver.device) ?: throw Exception("Could not open device")
+                val port = driver.ports[0]
 
-            usbSerialPort = port
-            usbIoManager = SerialInputOutputManager(usbSerialPort, this)
-            executor.submit(usbIoManager)
+                port.open(connection)
+                port.setParameters(baudRate, UsbSerialPort.DATABITS_8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
 
-            mainHandler.post { listener?.onConnected() }
-        } catch (e: Exception) {
-            sendError("Connection error: ${e.message}")
+                usbSerialPort = port
+                usbIoManager = SerialInputOutputManager(usbSerialPort, this)
+                executor.submit(usbIoManager)
+
+                mainHandler.post { listener?.onConnected() }
+            } catch (e: Exception) {
+                Log.e(TAG, "Connection error", e)
+                sendError("Connection error: ${e.message}")
+            }
         }
     }
 
@@ -131,13 +137,14 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             if (parts.isEmpty()) return
 
             val type = parts[0]
-            if (type.endsWith("GGA") && parts.size >= 10) {
+            if (type.endsWith("GGA") && parts.size >= 14) {
                 mainHandler.post { listener?.onGgaReceived(sentence) }
                 val lat = parseLatitude(parts[2], parts[3])
                 val lon = parseLongitude(parts[4], parts[5])
                 val quality = parts[6].toIntOrNull() ?: 0
                 val sats = parts[7].toIntOrNull() ?: 0
                 val alt = parts[9].toDoubleOrNull()
+                val age = parts[13].toDoubleOrNull()
 
                 val fixType = when(quality) {
                     1 -> "Single"
@@ -148,7 +155,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 }
 
                 if (lat != null && lon != null) {
-                    val location = SerialLocation(lat, lon, alt, satellites = sats, fixType = fixType)
+                    val location = SerialLocation(lat, lon, alt, satellites = sats, fixType = fixType, rtkAge = age)
                     mainHandler.post { listener?.onLocationUpdate(location) }
                 }
             } else if (type.endsWith("RMC") && parts.size >= 7) {
