@@ -114,8 +114,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         uri?.let { handleImportedFile(it) }
     }
 
-    private val exportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("application/geo+json")) { uri ->
-        uri?.let { exportDataToUri(it) }
+    private var lastExportFormat = "geojson"
+    private val exportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
+        uri?.let { exportDataToUri(it, lastExportFormat) }
     }
 
     private val mapStyles = listOf(
@@ -187,6 +188,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
         serialLocationEngine = SerialLocationEngine()
+
+        // Ensure baudSpinner has a default selection before any connection attempt
+        if (baudSpinner.adapter != null && baudSpinner.selectedItem == null) {
+            baudSpinner.setSelection(4) // Default to 115200
+        }
 
         ntripManager = NtripManager()
         ntripManager.listener = object : NtripManager.NtripListener {
@@ -411,6 +417,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             style.addSource(source)
 
             val wmsLayer = RasterLayer("wms-layer", "wms-source")
+            wmsLayer.setProperties(PropertyFactory.rasterOpacity(1.0f))
+            wmsLayer.setMaxZoom(30f) // Explicitly set layer max zoom
 
             // Try to find a good place for the layer - ideally above the background but below labels
             val layers = style.layers
@@ -759,22 +767,64 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             Toast.makeText(this, "No data to export", Toast.LENGTH_SHORT).show()
             return
         }
-        exportPicker.launch("export_data_${System.currentTimeMillis()}.geojson")
+        val formats = arrayOf("GeoJSON (.json)", "KML (.kml)", "QGZ (.qgz)")
+        AlertDialog.Builder(this)
+            .setTitle("Select Export Format")
+            .setItems(formats) { _, i ->
+                lastExportFormat = when(i) {
+                    0 -> "geojson"
+                    1 -> "kml"
+                    else -> "qgz"
+                }
+                val ext = if (lastExportFormat == "geojson") "json" else lastExportFormat
+                exportPicker.launch("export_data_${System.currentTimeMillis()}.$ext")
+            }.show()
     }
 
-    private fun exportDataToUri(uri: android.net.Uri) {
+    private fun exportDataToUri(uri: android.net.Uri, format: String) {
         executor.submit {
             try {
-                val collection = FeatureCollection.fromFeatures(currentFeatures)
                 contentResolver.openOutputStream(uri)?.use { stream ->
-                    stream.write(collection.toJson().toByteArray())
+                    when (format) {
+                        "geojson" -> {
+                            val collection = FeatureCollection.fromFeatures(currentFeatures)
+                            stream.write(collection.toJson().toByteArray())
+                        }
+                        "kml" -> stream.write(generateKml(currentFeatures).toByteArray())
+                        "qgz" -> generateQgz(currentFeatures, stream)
+                    }
                 }
                 runOnUiThread { Toast.makeText(this, "Export successful", Toast.LENGTH_SHORT).show() }
             } catch (e: Exception) {
                 Log.e(TAG, "Export error: ${e.message}")
-                runOnUiThread { Toast.makeText(this, "Export failed", Toast.LENGTH_SHORT).show() }
+                runOnUiThread { Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show() }
             }
         }
+    }
+
+    private fun generateKml(features: List<Feature>): String {
+        val sb = StringBuilder()
+        sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+        sb.append("<kml xmlns=\"http://www.opengis.net/kml/2.2\">\n<Document>\n")
+        features.forEach { f ->
+            val name = f.getStringProperty("name") ?: "Pt"
+            val geom = f.geometry()
+            if (geom is Point) {
+                val p = geom as Point
+                sb.append("<Placemark><name>$name</name><Point><coordinates>${p.longitude()},${p.latitude()}</coordinates></Point></Placemark>\n")
+            }
+        }
+        sb.append("</Document>\n</kml>")
+        return sb.toString()
+    }
+
+    private fun generateQgz(features: List<Feature>, out: java.io.OutputStream) {
+        val zos = java.util.zip.ZipOutputStream(out)
+        zos.putNextEntry(java.util.zip.ZipEntry("project.qgs"))
+        val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<qgis version=\"3.22.0\"></qgis>" // Placeholder
+        zos.write(xml.toByteArray())
+        zos.closeEntry()
+        zos.close()
     }
 
     private fun displayImportedFeatures(features: List<Feature>, sourceName: String) {
@@ -1045,6 +1095,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun connectToSerial(device: UsbDevice) {
+        if (!::baudSpinner.isInitialized) return
         val baudString = baudSpinner.selectedItem?.toString() ?: "115200"
         val baud = baudString.toIntOrNull() ?: 115200
         updateStatus("Connecting...")
