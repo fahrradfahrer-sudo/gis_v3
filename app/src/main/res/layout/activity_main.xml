@@ -79,6 +79,14 @@
                         android:text="Age: -"
                         android:textSize="10sp"
                         android:textColor="@android:color/black" />
+                    <TextView
+                        android:id="@+id/altText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:text="Alt: -"
+                        android:textSize="10sp"
+                        android:textColor="@android:color/black" />
                 </LinearLayout>
             </LinearLayout>
 
@@ -263,42 +271,32 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content" />
 
-            <CheckBox
-                android:id="@+id/wmsCheckbox"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="WMS Overlay" />
-
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="4dp">
-                <EditText
-                    android:id="@+id/wmsUrlDrawer"
-                    android:layout_width="match_parent"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="8dp">
+                <TextView
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:hint="WMS URL"
+                    android:layout_weight="1"
+                    android:text="WMS Layers"
+                    android:textStyle="bold" />
+                <Button
+                    android:id="@+id/addWmsButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="+"
                     android:textSize="10sp" />
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal">
-                    <EditText
-                        android:id="@+id/wmsLayersDrawer"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:hint="Layers"
-                        android:textSize="10sp" />
-                    <Button
-                        android:id="@+id/wmsSearchDrawer"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="S"
-                        android:textSize="10sp" />
-                </LinearLayout>
             </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/wmsLayerContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="4dp" />
 
             <View
                 android:layout_width="match_parent"

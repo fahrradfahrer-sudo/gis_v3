@@ -44,6 +44,7 @@ dependencies {
     implementation(libs.maplibre.android.sdk)
     implementation(libs.maplibre.scalebar)
     implementation(libs.usb.serial.android)
+    implementation("com.google.code.gson:gson:2.10.1")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

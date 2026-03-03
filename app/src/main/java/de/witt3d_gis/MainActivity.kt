@@ -63,10 +63,20 @@ import org.maplibre.geojson.Polygon
 import androidx.activity.result.contract.ActivityResultContracts
 import java.io.InputStream
 import java.net.URL
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
+
+data class WmsLayerConfig(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    var name: String,
+    var url: String,
+    var layers: String,
+    var enabled: Boolean = true
+)
 
 class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener {
     private val TAG = "MainActivity"
@@ -83,8 +93,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var drawerLayout: DrawerLayout
     private lateinit var menuButton: Button
     private lateinit var styleRadioGroup: RadioGroup
-    private lateinit var wmsCheckbox: CheckBox
     private lateinit var rtkAgeText: TextView
+    private lateinit var altText: TextView
     private lateinit var baudSpinner: Spinner
     private lateinit var measureButton: Button
     private lateinit var drawPointButton: Button
@@ -93,9 +103,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var editFeatureButton: Button
     private lateinit var clearDrawButton: Button
     private lateinit var scaleBar: ScaleBarView
-    private lateinit var wmsUrlDrawer: EditText
-    private lateinit var wmsLayersDrawer: EditText
     private lateinit var crsSpinner: Spinner
+    private lateinit var wmsLayerContainer: LinearLayout
+    private lateinit var addWmsButton: Button
 
     private lateinit var serialLocationManager: SerialLocationManager
     private lateinit var serialLocationEngine: SerialLocationEngine
@@ -104,7 +114,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private var isSerialConnected = false
     private var isNtripActive = false
-    private var isWmsEnabled = false
+    private var wmsLayers = mutableListOf<WmsLayerConfig>()
     private var pendingDevice: UsbDevice? = null
     private var isFirstFix = true
     private var isMeasureMode = false
@@ -174,8 +184,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
         val navView = findViewById<NavigationView>(R.id.navigationView)
         styleRadioGroup = navView.findViewById(R.id.styleRadioGroup)
-        wmsCheckbox = navView.findViewById(R.id.wmsCheckbox)
         rtkAgeText = findViewById(R.id.rtkAgeText)
+        altText = findViewById(R.id.altText)
         baudSpinner = findViewById<Spinner>(R.id.baudSpinner)
         crsSpinner = navView.findViewById<Spinner>(R.id.crsSpinner)
         measureButton = findViewById(R.id.measureButton)
@@ -185,17 +195,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         editFeatureButton = findViewById(R.id.editFeatureButton)
         clearDrawButton = findViewById(R.id.clearDrawButton)
         scaleBar = findViewById(R.id.scaleBar)
-
-        wmsUrlDrawer = navView.findViewById(R.id.wmsUrlDrawer)
-        wmsLayersDrawer = navView.findViewById(R.id.wmsLayersDrawer)
+        wmsLayerContainer = navView.findViewById(R.id.wmsLayerContainer)
+        addWmsButton = navView.findViewById(R.id.addWmsButton)
 
         val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        wmsUrlDrawer.setText(prefs.getString("wms_url", ""))
-        wmsLayersDrawer.setText(prefs.getString("wms_layers", ""))
+        loadWmsConfigs()
 
-        navView.findViewById<Button>(R.id.wmsSearchDrawer).setOnClickListener {
-            discoverWmsLayers(wmsUrlDrawer.text.toString(), wmsLayersDrawer)
-        }
+        addWmsButton.setOnClickListener { showWmsEditDialog(null) }
 
         setupBaudSpinner()
         setupCrsSpinner()
@@ -285,17 +291,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
         menuButton.setOnClickListener {
             drawerLayout.openDrawer(GravityCompat.START)
-        }
-
-        wmsCheckbox.setOnCheckedChangeListener { _, isChecked ->
-            isWmsEnabled = isChecked
-            if (isChecked) {
-                val p = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-                p.edit().putString("wms_url", wmsUrlDrawer.text.toString().trim())
-                        .putString("wms_layers", wmsLayersDrawer.text.toString().trim())
-                        .apply()
-            }
-            refreshWmsLayer()
         }
 
         findViewById<Button>(R.id.zoomInButton).setOnClickListener {
@@ -417,105 +412,74 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             map.setStyle(Style.Builder().fromJson(url)) { style ->
                 updateStatus("Empty Style Ready")
                 enableLocationComponent(style)
-                if (isWmsEnabled) refreshWmsLayer()
+                refreshWmsLayers()
             }
         } else {
             map.setStyle(url) { style ->
                 updateStatus("Map Ready")
                 enableLocationComponent(style)
-                if (isWmsEnabled) refreshWmsLayer()
+                refreshWmsLayers()
             }
         }
     }
 
-    private fun refreshWmsLayer() {
+    private fun refreshWmsLayers() {
         val style = map.style ?: return
-        style.removeLayer("wms-layer")
-        style.removeSource("wms-source")
 
-        if (!isWmsEnabled) return
+        // First, remove all existing WMS layers/sources
+        style.layers.filter { it.id.startsWith("wms-layer-") }.forEach { style.removeLayer(it) }
+        style.sources.filter { it.id.startsWith("wms-source-") }.forEach { style.removeSource(it) }
 
-        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        val wmsUrl = prefs.getString("wms_url", "") ?: ""
-
-        if (wmsUrl.isEmpty()) {
-            Toast.makeText(this, "Please set WMS URL in Settings", Toast.LENGTH_SHORT).show()
-            isWmsEnabled = false
-            wmsCheckbox.isChecked = false
-            return
+        // Find reference layer for z-ordering
+        var belowLayerId: String? = null
+        for (layer in style.layers) {
+            if (layer.id.contains("label", ignoreCase = true) || layer.id.contains("symbol", ignoreCase = true)) {
+                belowLayerId = layer.id
+                break
+            }
         }
 
-        try {
-            var finalWmsUrl = wmsUrl.trim()
-            if (finalWmsUrl.contains("SERVICE=WMS", ignoreCase = true)) {
-                if (finalWmsUrl.contains("REQUEST=GetCapabilities", ignoreCase = true)) {
-                    finalWmsUrl = finalWmsUrl.replace("REQUEST=GetCapabilities", "REQUEST=GetMap", ignoreCase = true)
-                }
-                if (!finalWmsUrl.contains("BBOX", ignoreCase = true)) {
-                    val separator = if (finalWmsUrl.contains("?")) "&" else "?"
-                    // We use WMS 1.1.1 parameters by default as they are most standard for Tile overlays
-                    // Using 512 width/height for better detail at high zoom
-                    val userLayers = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getString("wms_layers", "") ?: ""
-                    var params = "FORMAT=image/png&TRANSPARENT=TRUE&VERSION=1.1.1&SRS=EPSG:3857&WIDTH=512&HEIGHT=512&BBOX={bbox-epsg-3857}"
-
-                    if (!finalWmsUrl.contains("REQUEST=", ignoreCase = true)) {
-                        params += "&REQUEST=GetMap"
+        // Add enabled layers in reverse order (so the first in list is on top)
+        wmsLayers.filter { it.enabled }.reversed().forEachIndexed { index, config ->
+            try {
+                var finalWmsUrl = config.url.trim()
+                if (finalWmsUrl.contains("SERVICE=WMS", ignoreCase = true)) {
+                    if (finalWmsUrl.contains("REQUEST=GetCapabilities", ignoreCase = true)) {
+                        finalWmsUrl = finalWmsUrl.replace("REQUEST=GetCapabilities", "REQUEST=GetMap", ignoreCase = true)
                     }
-                    if (!finalWmsUrl.contains("STYLES=", ignoreCase = true)) {
-                        params += "&STYLES="
+                    if (!finalWmsUrl.contains("BBOX", ignoreCase = true)) {
+                        val separator = if (finalWmsUrl.contains("?")) "&" else "?"
+                        var params = "FORMAT=image/png&TRANSPARENT=TRUE&VERSION=1.1.1&SRS=EPSG:3857&WIDTH=512&HEIGHT=512&BBOX={bbox-epsg-3857}"
+                        if (!finalWmsUrl.contains("REQUEST=", ignoreCase = true)) params += "&REQUEST=GetMap"
+                        if (!finalWmsUrl.contains("STYLES=", ignoreCase = true)) params += "&STYLES="
+                        if (config.layers.isNotEmpty()) params += "&LAYERS=${config.layers}"
+                        else if (!finalWmsUrl.contains("LAYERS=", ignoreCase = true)) params += "&LAYERS=0"
+                        finalWmsUrl += separator + params
                     }
-
-                    // CRITICAL: Always use userLayers if present to avoid loading "all" layers or defaulting to 0
-                    if (userLayers.isNotEmpty()) {
-                        params += "&LAYERS=$userLayers"
-                    } else if (!finalWmsUrl.contains("LAYERS=", ignoreCase = true)) {
-                        params += "&LAYERS=0"
-                    }
-
-                    finalWmsUrl += separator + params
                 }
-            } else if (!finalWmsUrl.contains("{x}") && !finalWmsUrl.contains("{bbox-epsg-3857}")) {
-                updateStatus("WMS Warning: URL missing {x} or BBOX")
-            }
 
-            Log.i(TAG, "WMS Final URL: $finalWmsUrl")
-            updateStatus("Adding WMS...")
+                val tileSet = TileSet("2.2.0", finalWmsUrl)
+                tileSet.maxZoom = 24f
+                val source = RasterSource("wms-source-${config.id}", tileSet, 512)
+                style.addSource(source)
 
-            // MapLibre expect tile URL with {x} {y} {z} or similar.
-            val tileSet = TileSet("2.2.0", finalWmsUrl)
-            // Setting maxZoom for TileSet prevents the engine from scaling symbols too early
-            tileSet.maxZoom = 24f
-            val source = RasterSource("wms-source", tileSet, 512) // Reverting to standard tile size
-            style.addSource(source)
+                val wmsLayer = RasterLayer("wms-layer-${config.id}", "wms-source-${config.id}")
+                wmsLayer.setProperties(
+                    PropertyFactory.rasterOpacity(1.0f),
+                    PropertyFactory.rasterResampling(org.maplibre.android.style.layers.Property.RASTER_RESAMPLING_NEAREST)
+                )
+                wmsLayer.setMaxZoom(40f)
 
-            val wmsLayer = RasterLayer("wms-layer", "wms-source")
-            wmsLayer.setProperties(
-                PropertyFactory.rasterOpacity(1.0f),
-                PropertyFactory.rasterResampling(org.maplibre.android.style.layers.Property.RASTER_RESAMPLING_NEAREST)
-            )
-            // Setting maxZoom on the Layer to a very high value (40) keeps it visible even if we zoom past TileSet maxZoom
-            wmsLayer.setMaxZoom(40f)
-
-            // Try to find a good place for the layer - ideally above the background but below labels
-            val layers = style.layers
-            var belowLayerId: String? = null
-            for (layer in layers) {
-                if (layer.id.contains("label", ignoreCase = true) || layer.id.contains("symbol", ignoreCase = true)) {
-                    belowLayerId = layer.id
-                    break
+                if (belowLayerId != null) {
+                    style.addLayerBelow(wmsLayer, belowLayerId)
+                    // Ensure the next one is below this one
+                    belowLayerId = wmsLayer.id
+                } else {
+                    style.addLayer(wmsLayer)
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "WMS error for ${config.name}: ${e.message}")
             }
-
-            if (belowLayerId != null) {
-                style.addLayerBelow(wmsLayer, belowLayerId)
-            } else {
-                // If no labels found, add it to the top so it's definitely visible
-                style.addLayer(wmsLayer)
-            }
-            updateStatus("WMS Layer Active")
-        } catch (e: Exception) {
-            Log.e(TAG, "WMS error: ${e.message}")
-            updateStatus("WMS Error: ${e.message}")
         }
     }
 
@@ -609,15 +573,126 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     .putString("mount", mountInput.text.toString().trim())
                     .putString("user", userInput.text.toString().trim())
                     .putString("pass", passInput.text.toString().trim())
-                    .putString("wms_url", wmsInput.text.toString().trim())
-                    .putString("wms_layers", wmsLayersInput.text.toString().trim())
                     .apply()
 
                 if (isSerialConnected) startNtripFromPrefs()
-                if (isWmsEnabled) refreshWmsLayer()
             }
             .setNegativeButton("Cancel", null)
             .setNeutralButton("Stop NTRIP") { _, _ -> ntripManager.disconnect() }
+            .show()
+    }
+
+    private fun loadWmsConfigs() {
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val json = prefs.getString("wms_layers_json", null)
+        if (json != null) {
+            val type = object : TypeToken<List<WmsLayerConfig>>() {}.type
+            wmsLayers = Gson().fromJson<List<WmsLayerConfig>>(json, type).toMutableList()
+        }
+        updateWmsLayerUI()
+    }
+
+    private fun saveWmsConfigs() {
+        val json = Gson().toJson(wmsLayers)
+        getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit()
+            .putString("wms_layers_json", json)
+            .apply()
+        refreshWmsLayers()
+    }
+
+    private fun updateWmsLayerUI() {
+        wmsLayerContainer.removeAllViews()
+        wmsLayers.forEachIndexed { index, config ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, 4, 0, 4)
+            }
+
+            val cb = CheckBox(this).apply {
+                isChecked = config.enabled
+                setOnCheckedChangeListener { _, isChecked ->
+                    config.enabled = isChecked
+                    saveWmsConfigs()
+                }
+            }
+
+            val title = TextView(this).apply {
+                text = config.name
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                setOnClickListener { showWmsEditDialog(config) }
+            }
+
+            val upBtn = Button(this).apply {
+                text = "↑"
+                setPadding(0,0,0,0)
+                layoutParams = LinearLayout.LayoutParams(60, 60)
+                isEnabled = index > 0
+                setOnClickListener {
+                    java.util.Collections.swap(wmsLayers, index, index - 1)
+                    saveWmsConfigs()
+                    updateWmsLayerUI()
+                }
+            }
+
+            val downBtn = Button(this).apply {
+                text = "↓"
+                setPadding(0,0,0,0)
+                layoutParams = LinearLayout.LayoutParams(60, 60)
+                isEnabled = index < wmsLayers.size - 1
+                setOnClickListener {
+                    java.util.Collections.swap(wmsLayers, index, index + 1)
+                    saveWmsConfigs()
+                    updateWmsLayerUI()
+                }
+            }
+
+            val deleteBtn = Button(this).apply {
+                text = "X"
+                setPadding(0,0,0,0)
+                layoutParams = LinearLayout.LayoutParams(60, 60)
+                setOnClickListener {
+                    wmsLayers.removeAt(index)
+                    saveWmsConfigs()
+                    updateWmsLayerUI()
+                }
+            }
+
+            row.addView(cb); row.addView(title); row.addView(upBtn); row.addView(downBtn); row.addView(deleteBtn)
+            wmsLayerContainer.addView(row)
+        }
+    }
+
+    private fun showWmsEditDialog(config: WmsLayerConfig?) {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(60, 40, 60, 10)
+        }
+        val nameInput = EditText(this).apply { hint = "Name"; setText(config?.name ?: "") }
+        val urlInput = EditText(this).apply { hint = "WMS URL"; setText(config?.url ?: "") }
+        val layersInput = EditText(this).apply { hint = "Layers"; setText(config?.layers ?: "") }
+        val searchBtn = Button(this).apply {
+            text = "Search Layers"
+            setOnClickListener { discoverWmsLayers(urlInput.text.toString(), layersInput) }
+        }
+
+        layout.addView(nameInput); layout.addView(urlInput); layout.addView(layersInput); layout.addView(searchBtn)
+
+        AlertDialog.Builder(this)
+            .setTitle(if (config == null) "Add WMS" else "Edit WMS")
+            .setView(layout)
+            .setPositiveButton("Save") { _, _ ->
+                if (config == null) {
+                    wmsLayers.add(WmsLayerConfig(name = nameInput.text.toString(), url = urlInput.text.toString(), layers = layersInput.text.toString()))
+                } else {
+                    config.name = nameInput.text.toString()
+                    config.url = urlInput.text.toString()
+                    config.layers = layersInput.text.toString()
+                }
+                saveWmsConfigs()
+                updateWmsLayerUI()
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
@@ -1041,8 +1116,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                                         // Try to extract URL from source (it's encoded)
                                         val urlPart = source.split("url=").getOrNull(1)?.split("&")?.get(0)
                                         if (urlPart != null) {
-                                            wmsUrlDrawer.setText(java.net.URLDecoder.decode(urlPart, "UTF-8"))
-                                            wmsLayersDrawer.setText(layers[i])
+                                            val url = java.net.URLDecoder.decode(urlPart, "UTF-8")
+                                            val name = layers[i]
+                                            wmsLayers.add(WmsLayerConfig(name = name, url = url, layers = name))
+                                            saveWmsConfigs()
+                                            updateWmsLayerUI()
                                             updateStatus("QGZ WMS Loaded")
                                         }
                                     }.show()
@@ -1528,6 +1606,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             val ageStr = if (location.rtkAge != null) "${location.rtkAge}s" else "-"
             rtkAgeText.text = "Age: $ageStr"
+            val altStr = if (location.altitude != null) "%.2f m".format(location.altitude) else "-"
+            altText.text = "Alt: $altStr"
 
             lastLocation = LatLng(location.latitude, location.longitude)
             if (isMeasureMode) calculateMeasureResult()
