@@ -124,6 +124,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
         "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey",
         "MapLibre Demo" to "https://demotiles.maplibre.org/style.json",
+        "OpenStreetMap" to "{\"version\": 8, \"sources\": {\"osm\": {\"type\": \"raster\", \"tiles\": [\"https://a.tile.openstreetmap.org/{z}/{x}/{y}.png\"], \"tileSize\": 256}}, \"layers\": [{\"id\": \"osm\", \"type\": \"raster\", \"source\": \"osm\"}]}",
         "No Base Map" to "{\"version\": 8, \"sources\": {}, \"layers\": [{\"id\": \"background\", \"type\": \"background\", \"paint\": {\"background-color\": \"#FFFFFF\"}}]}"
     )
 
@@ -420,9 +421,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // MapLibre expect tile URL with {x} {y} {z} or similar.
             val tileSet = TileSet("2.2.0", finalWmsUrl)
-            // Setting maxZoom to a very high value (35) ensures the engine keeps the layer active even at 1:1 scale.
-            tileSet.maxZoom = 35f
-            val source = RasterSource("wms-source", tileSet, 128) // Smaller tiles = larger symbols
+            // Setting maxZoom for TileSet prevents the engine from scaling symbols too early
+            tileSet.maxZoom = 24f
+            val source = RasterSource("wms-source", tileSet, 512) // Reverting to standard tile size
             style.addSource(source)
 
             val wmsLayer = RasterLayer("wms-layer", "wms-source")
@@ -430,7 +431,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 PropertyFactory.rasterOpacity(1.0f),
                 PropertyFactory.rasterResampling(org.maplibre.android.style.layers.Property.RASTER_RESAMPLING_NEAREST)
             )
-            wmsLayer.setMaxZoom(35f) // Explicitly set layer max zoom to 35
+            // Setting maxZoom on the Layer to a very high value (40) keeps it visible even if we zoom past TileSet maxZoom
+            wmsLayer.setMaxZoom(40f)
 
             // Try to find a good place for the layer - ideally above the background but below labels
             val layers = style.layers

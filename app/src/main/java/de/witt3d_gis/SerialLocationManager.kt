@@ -163,18 +163,29 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
     private fun parseNmea(sentence: String) {
         try {
+            if (sentence.length < 6) return
             val parts = sentence.split(",")
             if (parts.isEmpty()) return
 
             val type = parts[0]
-            if (type.endsWith("GGA") && parts.size >= 14) {
+            if (type.endsWith("GGA") && parts.size >= 10) {
                 mainHandler.post { listener?.onGgaReceived(sentence) }
-                val lat = parseLatitude(parts[2], parts[3])
-                val lon = parseLongitude(parts[4], parts[5])
-                val quality = parts[6].toIntOrNull() ?: 0
-                val sats = parts[7].toIntOrNull() ?: 0
-                val alt = parts[9].toDoubleOrNull()
-                val age = parts[13].toDoubleOrNull()
+
+                val latStr = parts.getOrNull(2) ?: ""
+                val latHem = parts.getOrNull(3) ?: ""
+                val lonStr = parts.getOrNull(4) ?: ""
+                val lonHem = parts.getOrNull(5) ?: ""
+                val qualStr = parts.getOrNull(6) ?: "0"
+                val satStr = parts.getOrNull(7) ?: "0"
+                val altStr = parts.getOrNull(9) ?: ""
+                val ageStr = parts.getOrNull(13) ?: ""
+
+                val lat = parseLatitude(latStr, latHem)
+                val lon = parseLongitude(lonStr, lonHem)
+                val quality = qualStr.toIntOrNull() ?: 0
+                val sats = satStr.toIntOrNull() ?: 0
+                val alt = altStr.toDoubleOrNull()
+                val age = ageStr.toDoubleOrNull()
 
                 val fixType = when(quality) {
                     1 -> "Single"
@@ -189,16 +200,18 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                     mainHandler.post { listener?.onLocationUpdate(location) }
                 }
             } else if (type.endsWith("RMC") && parts.size >= 7) {
-                if (parts[2] == "A") {
-                    val lat = parseLatitude(parts[3], parts[4])
-                    val lon = parseLongitude(parts[5], parts[6])
+                if (parts.getOrNull(2) == "A") {
+                    val lat = parseLatitude(parts.getOrNull(3) ?: "", parts.getOrNull(4) ?: "")
+                    val lon = parseLongitude(parts.getOrNull(5) ?: "", parts.getOrNull(6) ?: "")
                     if (lat != null && lon != null) {
                         val location = SerialLocation(lat, lon)
                         mainHandler.post { listener?.onLocationUpdate(location) }
                     }
                 }
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "Parsing error for sentence: $sentence", e)
+        }
     }
 
     private fun parseLatitude(latStr: String, hemisphere: String): Double? {
