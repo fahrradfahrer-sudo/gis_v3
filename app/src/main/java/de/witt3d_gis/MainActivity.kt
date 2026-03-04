@@ -123,6 +123,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val drawPoints = mutableListOf<LatLng>()
     private var lastLocation: LatLng? = null
     private var currentFeatures = mutableListOf<Feature>()
+    private var movingFeature: Feature? = null
+    private var movingVertexIndex: Int = -1
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
@@ -249,6 +251,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             mapObj.moveCamera(CameraUpdateFactory.newLatLngZoom(LatLng(49.56333, 8.24750), 15.0))
 
             mapObj.addOnMapClickListener { latLng ->
+                if (movingFeature != null) {
+                    finishMovingFeature(latLng)
+                    return@addOnMapClickListener true
+                }
                 when {
                     isMeasureMode -> {
                         addMeasurePoint(latLng)
@@ -1252,10 +1258,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun updateDrawingButtons() {
-        drawPointButton.setBackgroundColor(if (drawingMode == 1) Color.LTGRAY else Color.WHITE)
-        drawLineButton.setBackgroundColor(if (drawingMode == 2) Color.LTGRAY else Color.WHITE)
-        drawPolyButton.setBackgroundColor(if (drawingMode == 3) Color.LTGRAY else Color.WHITE)
-        editFeatureButton.setBackgroundColor(if (drawingMode == 4) Color.LTGRAY else Color.WHITE)
+        val ralBlue = Color.parseColor("#00538E")
+
+        drawPointButton.setBackgroundColor(if (drawingMode == 1) ralBlue else Color.WHITE)
+        drawPointButton.setTextColor(if (drawingMode == 1) Color.WHITE else Color.BLACK)
+
+        drawLineButton.setBackgroundColor(if (drawingMode == 2) ralBlue else Color.WHITE)
+        drawLineButton.setTextColor(if (drawingMode == 2) Color.WHITE else Color.BLACK)
+
+        drawPolyButton.setBackgroundColor(if (drawingMode == 3) ralBlue else Color.WHITE)
+        drawPolyButton.setTextColor(if (drawingMode == 3) Color.WHITE else Color.BLACK)
+
+        editFeatureButton.setBackgroundColor(if (drawingMode == 4) ralBlue else Color.WHITE)
+        editFeatureButton.setTextColor(if (drawingMode == 4) Color.WHITE else Color.BLACK)
 
         when(drawingMode) {
             1 -> updateStatus("Drawing Point: Tap on map")
@@ -1427,6 +1442,33 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 setText(f.getStringProperty("name") ?: "")
                 hint = "Note/Name"
             }
+
+            val geom = f.geometry()
+            var vertexIndex = -1
+            if (geom is LineString) {
+                val coords = geom.coordinates()
+                var minVDist = 20.0
+                coords.forEachIndexed { i, p ->
+                    val res = FloatArray(1)
+                    Location.distanceBetween(latLng.latitude, latLng.longitude, p.latitude(), p.longitude(), res)
+                    if (res[0] < minVDist) {
+                        minVDist = res[0].toDouble()
+                        vertexIndex = i
+                    }
+                }
+            } else if (geom is Polygon) {
+                val outer = geom.coordinates().firstOrNull()
+                var minVDist = 20.0
+                outer?.forEachIndexed { i, p ->
+                    val res = FloatArray(1)
+                    Location.distanceBetween(latLng.latitude, latLng.longitude, p.latitude(), p.longitude(), res)
+                    if (res[0] < minVDist) {
+                        minVDist = res[0].toDouble()
+                        vertexIndex = i
+                    }
+                }
+            }
+
             AlertDialog.Builder(this)
                 .setTitle("Edit Feature")
                 .setView(nameInput)
@@ -1439,8 +1481,58 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     refreshFeatureLayer()
                 }
                 .setNegativeButton("Cancel", null)
+                .setNeutralButton("Move") { _, _ ->
+                    movingFeature = f
+                    movingVertexIndex = vertexIndex
+                    updateStatus("Moving: Tap new location")
+                }
                 .show()
         } ?: Toast.makeText(this, "No feature nearby to edit", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun finishMovingFeature(newLatLng: LatLng) {
+        val f = movingFeature ?: return
+        val geom = f.geometry()
+        val newPoint = Point.fromLngLat(newLatLng.longitude, newLatLng.latitude)
+
+        when (geom) {
+            is Point -> {
+                currentFeatures.remove(f)
+                val newF = Feature.fromGeometry(newPoint)
+                f.properties()?.entrySet()?.forEach { newF.addProperty(it.key, it.value) }
+                currentFeatures.add(newF)
+            }
+            is LineString -> {
+                val coords = geom.coordinates().toMutableList()
+                if (movingVertexIndex != -1) {
+                    coords[movingVertexIndex] = newPoint
+                    currentFeatures.remove(f)
+                    val newF = Feature.fromGeometry(LineString.fromLngLats(coords))
+                    f.properties()?.entrySet()?.forEach { newF.addProperty(it.key, it.value) }
+                    currentFeatures.add(newF)
+                }
+            }
+            is Polygon -> {
+                val rings = geom.coordinates().toMutableList()
+                val outer = rings[0].toMutableList()
+                if (movingVertexIndex != -1) {
+                    outer[movingVertexIndex] = newPoint
+                    // If moving start/end of ring, update both
+                    if (movingVertexIndex == 0) outer[outer.size - 1] = newPoint
+                    if (movingVertexIndex == outer.size - 1) outer[0] = newPoint
+
+                    rings[0] = outer
+                    currentFeatures.remove(f)
+                    val newF = Feature.fromGeometry(Polygon.fromLngLats(rings))
+                    f.properties()?.entrySet()?.forEach { newF.addProperty(it.key, it.value) }
+                    currentFeatures.add(newF)
+                }
+            }
+        }
+        movingFeature = null
+        movingVertexIndex = -1
+        refreshFeatureLayer()
+        updateDrawingButtons()
     }
 
     private fun clearDrawing() {
