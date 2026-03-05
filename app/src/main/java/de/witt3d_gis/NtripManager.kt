@@ -25,6 +25,8 @@ class NtripManager {
     private var lastUser = ""
     private var lastPass = ""
 
+    private var manualGga: String? = null
+
     interface NtripListener {
         fun onRtcmData(data: ByteArray)
         fun onError(message: String)
@@ -137,13 +139,18 @@ class NtripManager {
         }
     }
 
+    fun setManualGga(gga: String?) {
+        manualGga = gga
+    }
+
     fun sendGga(gga: String) {
+        val toSend = manualGga ?: gga
         executor.submit {
             try {
                 val currentSocket = socket
                 if (isRunning && currentSocket?.isConnected == true) {
                     val out = currentSocket.getOutputStream()
-                    val msg = if (gga.endsWith("\r\n")) gga else "$gga\r\n"
+                    val msg = if (toSend.endsWith("\r\n")) toSend else "$toSend\r\n"
                     synchronized(out) {
                         out.write(msg.toByteArray())
                         out.flush()
