@@ -95,6 +95,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var styleRadioGroup: RadioGroup
     private lateinit var rtkAgeText: TextView
     private lateinit var altText: TextView
+    private lateinit var speedText: TextView
     private lateinit var baudSpinner: Spinner
     private lateinit var measureButton: Button
     private lateinit var drawPointButton: Button
@@ -102,7 +103,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var drawPolyButton: Button
     private lateinit var editFeatureButton: Button
     private lateinit var clearDrawButton: Button
-    private lateinit var distanceArrow: TextView
+    private lateinit var distanceArrow: View
+    private lateinit var distanceArrowText: TextView
+    private lateinit var arrowIcon: View
     private lateinit var scaleBar: ScaleBarView
     private lateinit var crsSpinner: Spinner
     private lateinit var wmsLayerContainer: LinearLayout
@@ -137,6 +140,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private var lastExportFormat = "geojson"
     private val exportPicker = registerForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
         uri?.let { exportDataToUri(it, lastExportFormat) }
+    }
+
+    private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let { exportShpToFolder(it) }
     }
 
     private val mapStyles = listOf(
@@ -189,6 +196,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         styleRadioGroup = navView.findViewById(R.id.styleRadioGroup)
         rtkAgeText = findViewById(R.id.rtkAgeText)
         altText = findViewById(R.id.altText)
+        speedText = findViewById(R.id.speedText)
         baudSpinner = findViewById<Spinner>(R.id.baudSpinner)
         crsSpinner = navView.findViewById<Spinner>(R.id.crsSpinner)
         measureButton = findViewById(R.id.measureButton)
@@ -198,6 +206,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         editFeatureButton = findViewById(R.id.editFeatureButton)
         clearDrawButton = findViewById(R.id.clearDrawButton)
         distanceArrow = findViewById(R.id.distanceArrow)
+        distanceArrowText = findViewById(R.id.distanceArrowText)
+        arrowIcon = findViewById(R.id.arrowIcon)
         scaleBar = findViewById(R.id.scaleBar)
         wmsLayerContainer = navView.findViewById(R.id.wmsLayerContainer)
         addWmsButton = navView.findViewById(R.id.addWmsButton)
@@ -539,13 +549,16 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val userInput = EditText(this).apply { hint = "NTRIP User"; setText(prefs.getString("user", "")) }
         val passInput = EditText(this).apply { hint = "NTRIP Pass"; setText(prefs.getString("pass", "")) }
 
-        val manualGgaCheck = CheckBox(this).apply { text = "Manual Position (GGA)"; isChecked = prefs.getBoolean("manual_gga_en", false) }
-        val manualGgaInput = EditText(this).apply {
-            hint = "\$GPGGA,..."
-            setText(prefs.getString("manual_gga_val", ""))
-            isEnabled = manualGgaCheck.isChecked
+        val manualGgaCheck = CheckBox(this).apply { text = "Manual Position"; isChecked = prefs.getBoolean("manual_gga_en", false) }
+        val manualLatInput = EditText(this).apply { hint = "Lat (e.g. 49.123)"; setText(prefs.getString("manual_lat", "")); isEnabled = manualGgaCheck.isChecked; inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
+        val manualLonInput = EditText(this).apply { hint = "Lon (e.g. 8.123)"; setText(prefs.getString("manual_lon", "")); isEnabled = manualGgaCheck.isChecked; inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
+        val manualAltInput = EditText(this).apply { hint = "Alt (m)"; setText(prefs.getString("manual_alt", "")); isEnabled = manualGgaCheck.isChecked; inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL }
+
+        manualGgaCheck.setOnCheckedChangeListener { _, isChecked ->
+            manualLatInput.isEnabled = isChecked
+            manualLonInput.isEnabled = isChecked
+            manualAltInput.isEnabled = isChecked
         }
-        manualGgaCheck.setOnCheckedChangeListener { _, isChecked -> manualGgaInput.isEnabled = isChecked }
 
         val wmsInput = EditText(this).apply { hint = "WMS URL"; setText(prefs.getString("wms_url", "")) }
 
@@ -579,14 +592,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
 
         layout.addView(hostInput); layout.addView(portInput); layout.addView(mountInput); layout.addView(userInput); layout.addView(passInput)
-        layout.addView(manualGgaCheck); layout.addView(manualGgaInput)
+        layout.addView(manualGgaCheck); layout.addView(manualLatInput); layout.addView(manualLonInput); layout.addView(manualAltInput)
         layout.addView(wmsInput); layout.addView(wmsRow)
 
         AlertDialog.Builder(this)
             .setTitle("Settings")
             .setView(layout)
             .setPositiveButton("Save & Start NTRIP") { _, _ ->
-                val ggaVal = manualGgaInput.text.toString().trim()
+                val latStr = manualLatInput.text.toString().trim()
+                val lonStr = manualLonInput.text.toString().trim()
+                val altStr = manualAltInput.text.toString().trim()
+
                 prefs.edit()
                     .putString("host", hostInput.text.toString().trim())
                     .putString("port", portInput.text.toString().trim())
@@ -594,11 +610,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     .putString("user", userInput.text.toString().trim())
                     .putString("pass", passInput.text.toString().trim())
                     .putBoolean("manual_gga_en", manualGgaCheck.isChecked)
-                    .putString("manual_gga_val", ggaVal)
+                    .putString("manual_lat", latStr)
+                    .putString("manual_lon", lonStr)
+                    .putString("manual_alt", altStr)
                     .apply()
 
-                if (manualGgaCheck.isChecked && ggaVal.isNotEmpty()) {
-                    ntripManager.setManualGga(ggaVal)
+                if (manualGgaCheck.isChecked) {
+                    val gga = constructGga(latStr.toDoubleOrNull() ?: 0.0, lonStr.toDoubleOrNull() ?: 0.0, altStr.toDoubleOrNull() ?: 0.0)
+                    ntripManager.setManualGga(gga)
                 } else {
                     ntripManager.setManualGga(null)
                 }
@@ -947,7 +966,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             Toast.makeText(this, "No data to export", Toast.LENGTH_SHORT).show()
             return
         }
-        val formats = arrayOf("GeoJSON (.json)", "KML (.kml)", "QGZ (.qgz)", "Shapefile (.zip)")
+        val formats = arrayOf("GeoJSON (.json)", "KML (.kml)", "QGZ (.qgz)", "Shapefile (Folder: .shp/.dbf/.shx)")
         AlertDialog.Builder(this)
             .setTitle("Select Export Format")
             .setItems(formats) { _, i ->
@@ -957,8 +976,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     2 -> "qgz"
                     else -> "shp"
                 }
-                val ext = if (lastExportFormat == "geojson") "json" else if (lastExportFormat == "shp") "zip" else lastExportFormat
-                exportPicker.launch("export_data_${System.currentTimeMillis()}.$ext")
+                if (lastExportFormat == "shp") {
+                    folderPicker.launch(null)
+                } else {
+                    val ext = if (lastExportFormat == "geojson") "json" else lastExportFormat
+                    exportPicker.launch("export_data_${System.currentTimeMillis()}.$ext")
+                }
             }.show()
     }
 
@@ -973,7 +996,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         }
                         "kml" -> stream.write(generateKml(currentFeatures).toByteArray())
                         "qgz" -> generateQgz(currentFeatures, stream)
-                        "shp" -> generateShpZip(currentFeatures, stream)
                     }
                 }
                 runOnUiThread { Toast.makeText(this, "Export successful", Toast.LENGTH_SHORT).show() }
@@ -982,6 +1004,45 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 runOnUiThread { Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show() }
             }
         }
+    }
+
+    private fun exportShpToFolder(folderUri: android.net.Uri) {
+        executor.submit {
+            try {
+                val pickedDir = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, folderUri) ?: return@submit
+                val baseName = "export_${System.currentTimeMillis()}"
+
+                val points = currentFeatures.filter { it.geometry() is Point }
+                val lines = currentFeatures.filter { it.geometry() is LineString }
+                val polys = currentFeatures.filter { it.geometry() is Polygon }
+
+                if (points.isNotEmpty()) {
+                    writeShpComponent(pickedDir, "${baseName}_points", 1, points)
+                }
+                if (lines.isNotEmpty()) {
+                    writeShpComponent(pickedDir, "${baseName}_lines", 3, lines)
+                }
+                if (polys.isNotEmpty()) {
+                    writeShpComponent(pickedDir, "${baseName}_polys", 5, polys)
+                }
+
+                runOnUiThread { Toast.makeText(this, "Shapefile components exported to folder", Toast.LENGTH_SHORT).show() }
+            } catch (e: Exception) {
+                Log.e(TAG, "SHP Folder Export error: ${e.message}")
+                runOnUiThread { Toast.makeText(this, "Folder Export failed: ${e.message}", Toast.LENGTH_SHORT).show() }
+            }
+        }
+    }
+
+    private fun writeShpComponent(dir: androidx.documentfile.provider.DocumentFile, name: String, type: Int, features: List<Feature>) {
+        val shpFile = dir.createFile("application/octet-stream", "$name.shp")
+        contentResolver.openOutputStream(shpFile!!.uri)?.use { it.write(writeShpBytes(features, type)) }
+
+        val shxFile = dir.createFile("application/octet-stream", "$name.shx")
+        contentResolver.openOutputStream(shxFile!!.uri)?.use { it.write(writeShxBytes(features, type)) }
+
+        val dbfFile = dir.createFile("application/octet-stream", "$name.dbf")
+        contentResolver.openOutputStream(dbfFile!!.uri)?.use { it.write(writeDbfBytes(features)) }
     }
 
     private fun generateKml(features: List<Feature>): String {
@@ -1014,120 +1075,124 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         zos.close()
     }
 
-    private fun generateShpZip(features: List<Feature>, out: java.io.OutputStream) {
-        val zos = java.util.zip.ZipOutputStream(out)
 
-        // .shp
-        zos.putNextEntry(java.util.zip.ZipEntry("data.shp"))
-        val shpBytes = writeShpPointsBytes(features)
-        zos.write(shpBytes)
-        zos.closeEntry()
-
-        // .shx
-        zos.putNextEntry(java.util.zip.ZipEntry("data.shx"))
-        val shxBytes = writeShxPointsBytes(features)
-        zos.write(shxBytes)
-        zos.closeEntry()
-
-        // .dbf
-        zos.putNextEntry(java.util.zip.ZipEntry("data.dbf"))
-        val dbfBytes = writeDbfPointsBytes(features)
-        zos.write(dbfBytes)
-        zos.closeEntry()
-
-        zos.close()
-    }
-
-    private fun writeShpPointsBytes(features: List<Feature>): ByteArray {
-        val bb = java.nio.ByteBuffer.allocate(1024 * 1024).order(java.nio.ByteOrder.BIG_ENDIAN)
-        bb.putInt(9994) // Magic
-        bb.putInt(0); bb.putInt(0); bb.putInt(0); bb.putInt(0); bb.putInt(0)
+    private fun writeShpBytes(features: List<Feature>, type: Int): ByteArray {
+        val bb = java.nio.ByteBuffer.allocate(2 * 1024 * 1024).order(java.nio.ByteOrder.BIG_ENDIAN)
+        bb.putInt(9994); bb.putInt(0); bb.putInt(0); bb.putInt(0); bb.putInt(0); bb.putInt(0)
         val sizePos = bb.position(); bb.putInt(0)
-        bb.putInt(1000); bb.putInt(1) // Version 1000, Type Point
+        bb.putInt(1000); bb.putInt(type)
 
-        // Bounds (WGS84)
-        var minX = 180.0; var minY = 90.0; var maxX = -180.0; var maxY = -90.0
-        features.forEach { f ->
-            val p = f.geometry() as? Point ?: return@forEach
-            minX = Math.min(minX, p.longitude()); minY = Math.min(minY, p.latitude())
-            maxX = Math.max(maxX, p.longitude()); maxY = Math.max(maxY, p.latitude())
-        }
-        bb.putDouble(minX); bb.putDouble(minY); bb.putDouble(maxX); bb.putDouble(maxY)
+        val bounds = calculateBounds(features)
+        bb.putDouble(bounds[0]); bb.putDouble(bounds[1]); bb.putDouble(bounds[2]); bb.putDouble(bounds[3])
         bb.putDouble(0.0); bb.putDouble(0.0); bb.putDouble(0.0); bb.putDouble(0.0)
 
-        var count = 0
-        features.forEach { f ->
-            val p = f.geometry() as? Point ?: return@forEach
-            bb.putInt(++count); bb.putInt(10) // Content length (10 words)
-            bb.order(java.nio.ByteOrder.LITTLE_ENDIAN)
-            bb.putInt(1); bb.putDouble(p.longitude()); bb.putDouble(p.latitude())
+        features.forEachIndexed { i, f ->
             bb.order(java.nio.ByteOrder.BIG_ENDIAN)
+            bb.putInt(i + 1)
+            val contentSizePos = bb.position(); bb.putInt(0)
+
+            bb.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            val startPos = bb.position()
+            writeGeometry(bb, f.geometry(), type)
+            val endPos = bb.position()
+            val contentLenWords = (endPos - startPos) / 2
+
+            bb.order(java.nio.ByteOrder.BIG_ENDIAN)
+            bb.putInt(contentSizePos, contentLenWords)
         }
+
         val finalSize = bb.position()
         bb.putInt(sizePos, finalSize / 2)
         return bb.array().copyOf(finalSize)
     }
 
-    private fun writeShxPointsBytes(features: List<Feature>): ByteArray {
+    private fun writeShxBytes(features: List<Feature>, type: Int): ByteArray {
         val bb = java.nio.ByteBuffer.allocate(1024 * 1024).order(java.nio.ByteOrder.BIG_ENDIAN)
         bb.putInt(9994); bb.putInt(0); bb.putInt(0); bb.putInt(0); bb.putInt(0); bb.putInt(0)
         val sizePos = bb.position(); bb.putInt(0)
-        bb.putInt(1000); bb.putInt(1)
+        bb.putInt(1000); bb.putInt(type)
 
-        // Bounds same as shp
-        var minX = 180.0; var minY = 90.0; var maxX = -180.0; var maxY = -90.0
-        features.forEach { f ->
-            val p = f.geometry() as? Point ?: return@forEach
-            minX = Math.min(minX, p.longitude()); minY = Math.min(minY, p.latitude())
-            maxX = Math.max(maxX, p.longitude()); maxY = Math.max(maxY, p.latitude())
-        }
-        bb.putDouble(minX); bb.putDouble(minY); bb.putDouble(maxX); bb.putDouble(maxY)
+        val bounds = calculateBounds(features)
+        bb.putDouble(bounds[0]); bb.putDouble(bounds[1]); bb.putDouble(bounds[2]); bb.putDouble(bounds[3])
         bb.putDouble(0.0); bb.putDouble(0.0); bb.putDouble(0.0); bb.putDouble(0.0)
 
-        var offset = 50 // Start offset (100 bytes = 50 words)
+        var offsetWords = 50
         features.forEach { f ->
-            if (f.geometry() is Point) {
-                bb.putInt(offset); bb.putInt(10)
-                offset += 14 // 8 (header) + 20 (content) = 28 bytes = 14 words
-            }
+            val tempBb = java.nio.ByteBuffer.allocate(1024 * 64).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            writeGeometry(tempBb, f.geometry(), type)
+            val contentLenWords = tempBb.position() / 2
+            bb.putInt(offsetWords)
+            bb.putInt(contentLenWords)
+            offsetWords += 4 + contentLenWords
         }
+
         val finalSize = bb.position()
         bb.putInt(sizePos, finalSize / 2)
         return bb.array().copyOf(finalSize)
     }
 
-    private fun writeDbfPointsBytes(features: List<Feature>): ByteArray {
-        val points = features.filter { it.geometry() is Point }
-        val headerSize = 32 + (32 * 1) + 1 // Header (32) + 1 field (32) + Term (1)
-        val recordSize = 1 + 50 // Flag (1) + Name field (50)
-        val bb = java.nio.ByteBuffer.allocate(headerSize + (points.size * recordSize) + 1).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    private fun writeDbfBytes(features: List<Feature>): ByteArray {
+        val headerSize = 32 + 32 + 1
+        val recordSize = 1 + 50
+        val bb = java.nio.ByteBuffer.allocate(headerSize + (features.size * recordSize) + 1).order(java.nio.ByteOrder.LITTLE_ENDIAN)
 
-        // Header
-        bb.put(0x03.toByte()) // Version
-        bb.put(24.toByte()); bb.put(1.toByte()); bb.put(1.toByte()) // Date
-        bb.putInt(points.size)
-        bb.putShort(headerSize.toShort())
-        bb.putShort(recordSize.toShort())
-        bb.position(bb.position() + 20) // Reserved
+        bb.put(0x03.toByte()); bb.put(24.toByte()); bb.put(3.toByte()); bb.put(1.toByte())
+        bb.putInt(features.size); bb.putShort(headerSize.toShort()); bb.putShort(recordSize.toShort())
+        bb.position(bb.position() + 20)
 
-        // Field descriptor "NAME"
-        val nameField = ByteArray(11) { i -> if (i < "NAME".length) "NAME"[i].toByte() else 0 }
-        bb.put(nameField); bb.put('C'.toByte()) // Type C
-        bb.position(bb.position() + 4) // Offset
-        bb.put(50.toByte()); bb.put(0.toByte()) // Len 50
-        bb.position(bb.position() + 14) // Reserved
+        val nameField = "NAME".padEnd(11, '\u0000').toByteArray()
+        bb.put(nameField); bb.put('C'.toByte()); bb.position(bb.position() + 4)
+        bb.put(50.toByte()); bb.put(0.toByte()); bb.position(bb.position() + 14)
+        bb.put(0x0D.toByte())
 
-        bb.put(0x0D.toByte()) // Term
-
-        // Records
-        points.forEach { f ->
-            bb.put(0x20.toByte()) // Active record
+        features.forEach { f ->
+            bb.put(0x20.toByte())
             val name = (f.getStringProperty("name") ?: "").take(50).padEnd(50, ' ')
             bb.put(name.toByteArray(Charsets.US_ASCII))
         }
-        bb.put(0x1A.toByte()) // EOF
-
+        bb.put(0x1A.toByte())
         return bb.array().copyOf(bb.position())
+    }
+
+    private fun calculateBounds(features: List<Feature>): DoubleArray {
+        var minX = 180.0; var minY = 90.0; var maxX = -180.0; var maxY = -90.0
+        features.forEach { f ->
+            val geom = f.geometry()
+            val pts = when(geom) {
+                is Point -> listOf(geom)
+                is LineString -> geom.coordinates()
+                is Polygon -> geom.coordinates().flatten()
+                else -> emptyList()
+            }
+            pts.forEach { p ->
+                minX = Math.min(minX, p.longitude()); minY = Math.min(minY, p.latitude())
+                maxX = Math.max(maxX, p.longitude()); maxY = Math.max(maxY, p.latitude())
+            }
+        }
+        return doubleArrayOf(minX, minY, maxX, maxY)
+    }
+
+    private fun writeGeometry(bb: java.nio.ByteBuffer, geom: org.maplibre.geojson.Geometry?, type: Int) {
+        bb.putInt(type)
+        when (type) {
+            1 -> { // Point
+                val p = geom as Point
+                bb.putDouble(p.longitude()); bb.putDouble(p.latitude())
+            }
+            3, 5 -> { // Polyline, Polygon
+                val pts = if (type == 3) (geom as LineString).coordinates() else (geom as Polygon).coordinates().flatten()
+                var minX = 180.0; var minY = 90.0; var maxX = -180.0; var maxY = -90.0
+                pts.forEach { p ->
+                    minX = Math.min(minX, p.longitude()); minY = Math.min(minY, p.latitude())
+                    maxX = Math.max(maxX, p.longitude()); maxY = Math.max(maxY, p.latitude())
+                }
+                bb.putDouble(minX); bb.putDouble(minY); bb.putDouble(maxX); bb.putDouble(maxY)
+                bb.putInt(1) // NumParts
+                bb.putInt(pts.size) // NumPoints
+                bb.putInt(0) // Parts[0]
+                pts.forEach { p -> bb.putDouble(p.longitude()); bb.putDouble(p.latitude()) }
+            }
+        }
     }
 
     private fun java.nio.ByteBuffer.putInt(pos: Int, value: Int) {
@@ -1767,21 +1832,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             if (isOffScreen) {
                 distanceArrow.visibility = View.VISIBLE
-                val angle = Math.atan2(point.y.toDouble() - (mapView.height / 2.0), point.x.toDouble() - (mapView.width / 2.0))
-                val arrowChar = when {
-                    angle > -Math.PI/8 && angle <= Math.PI/8 -> "→"
-                    angle > Math.PI/8 && angle <= 3*Math.PI/8 -> "↘"
-                    angle > 3*Math.PI/8 && angle <= 5*Math.PI/8 -> "↓"
-                    angle > 5*Math.PI/8 && angle <= 7*Math.PI/8 -> "↙"
-                    angle > 7*Math.PI/8 || angle <= -7*Math.PI/8 -> "←"
-                    angle > -7*Math.PI/8 && angle <= -5*Math.PI/8 -> "↖"
-                    angle > -5*Math.PI/8 && angle <= -3*Math.PI/8 -> "↑"
-                    else -> "↗"
-                }
-                distanceArrow.text = "$arrowChar %.1fm".format(dToGnss)
+                val angleRad = Math.atan2(point.y.toDouble() - (mapView.height / 2.0), point.x.toDouble() - (mapView.width / 2.0))
+                val angleDeg = Math.toDegrees(angleRad) + 90.0
+                arrowIcon.rotation = angleDeg.toFloat()
+                distanceArrowText.text = "%.1fm".format(dToGnss)
 
                 // Position arrow on screen edge
-                val margin = 50f
+                val margin = 100f
                 var targetX = point.x.coerceIn(margin, mapView.width - margin)
                 var targetY = point.y.coerceIn(margin, mapView.height - margin)
 
@@ -1827,15 +1884,39 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (isNtripActive) ntripManager.sendGga(sentence)
     }
 
+    private var lastFixType = ""
+    private var lastSats = -1
+    private var lastRtkAge = -1.0
+    private var lastAlt = -1.0
+    private var lastSpeed = -1.0
+
     override fun onLocationUpdate(location: SerialLocation) {
         runOnUiThread {
-            fixStatusText.text = location.fixType ?: "No Fix"
-            satCountText.text = "Sats: ${location.satellites ?: 0}"
+            val fixType = location.fixType ?: "No Fix"
+            if (fixType != lastFixType) { fixStatusText.text = fixType; lastFixType = fixType }
 
-            val ageStr = if (location.rtkAge != null) "${location.rtkAge}s" else "-"
-            rtkAgeText.text = "Age: $ageStr"
-            val altStr = if (location.altitude != null) "%.2f m".format(location.altitude) else "-"
-            altText.text = "Alt: $altStr"
+            val sats = location.satellites ?: 0
+            if (sats != lastSats) { satCountText.text = "Sats: $sats"; lastSats = sats }
+
+            val age = location.rtkAge ?: -1.0
+            if (age != lastRtkAge) {
+                val ageStr = if (age >= 0) "${age}s" else "-"
+                rtkAgeText.text = "Age: $ageStr"
+                lastRtkAge = age
+            }
+
+            val alt = location.altitude ?: -1.0
+            if (alt != lastAlt) {
+                val altStr = if (alt != -1.0) "%.2f m".format(alt) else "-"
+                altText.text = "Alt: $altStr"
+                lastAlt = alt
+            }
+
+            val speed = location.speed ?: 0.0
+            if (Math.abs(speed - lastSpeed) > 0.1) {
+                speedText.text = "%.1f km/h".format(speed)
+                lastSpeed = speed
+            }
 
             lastLocation = LatLng(location.latitude, location.longitude)
             if (isMeasureMode) calculateMeasureResult()
@@ -1868,13 +1949,37 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         startNtripFromPrefs()
     }
 
+    private fun constructGga(lat: Double, lon: Double, alt: Double): String {
+        val time = java.text.SimpleDateFormat("HHmmss.SS", java.util.Locale.US).format(java.util.Date())
+
+        val latDeg = Math.abs(lat).toInt()
+        val latMin = (Math.abs(lat) - latDeg) * 60.0
+        val latStr = "%02d%07.4f".format(java.util.Locale.US, latDeg, latMin)
+        val latHem = if (lat >= 0) "N" else "S"
+
+        val lonDeg = Math.abs(lon).toInt()
+        val lonMin = (Math.abs(lon) - lonDeg) * 60.0
+        val lonStr = "%03d%07.4f".format(java.util.Locale.US, lonDeg, lonMin)
+        val lonHem = if (lon >= 0) "E" else "W"
+
+        val gga = "GPGGA,$time,$latStr,$latHem,$lonStr,$lonHem,1,08,0.9,%.2f,M,0.0,M,,".format(java.util.Locale.US, alt)
+        var checksum = 0
+        gga.forEach { checksum = checksum xor it.toInt() }
+        return "\$$gga*%02X".format(checksum)
+    }
+
     private fun startNtripFromPrefs() {
         val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
 
         val manualEn = prefs.getBoolean("manual_gga_en", false)
-        val manualVal = prefs.getString("manual_gga_val", "") ?: ""
-        if (manualEn && manualVal.isNotEmpty()) ntripManager.setManualGga(manualVal)
-        else ntripManager.setManualGga(null)
+        if (manualEn) {
+            val lat = prefs.getString("manual_lat", "0")?.toDoubleOrNull() ?: 0.0
+            val lon = prefs.getString("manual_lon", "0")?.toDoubleOrNull() ?: 0.0
+            val alt = prefs.getString("manual_alt", "0")?.toDoubleOrNull() ?: 0.0
+            ntripManager.setManualGga(constructGga(lat, lon, alt))
+        } else {
+            ntripManager.setManualGga(null)
+        }
 
         val host = prefs.getString("host", "") ?: ""
         if (host.isNotEmpty()) {

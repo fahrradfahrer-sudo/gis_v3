@@ -1,30 +1,22 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="32dp"
-    android:height="32dp"
-    android:viewportWidth="32"
-    android:viewportHeight="32">
-    <group
-        android:pivotX="16"
-        android:pivotY="16"
-        android:rotation="45">
-        <!-- Circle with outline -->
-        <path
-            android:strokeColor="#000000"
-            android:strokeWidth="1.5"
-            android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
-        <path
-            android:strokeColor="#FF0000"
-            android:strokeWidth="1.2"
-            android:pathData="M16,16 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Circle -->
+    <path
+        android:strokeColor="#FF0000"
+        android:strokeWidth="1.5"
+        android:pathData="M24,24 m-15,0 a15,15 0 1,0 30,0 a15,15 0 1,0 -30,0" />
 
-        <!-- Cross lines with gaps -->
-        <path
-            android:strokeColor="#000000"
-            android:strokeWidth="1.5"
-            android:pathData="M16,2 L16,10 M16,22 L16,30 M2,16 L10,16 M22,16 L30,16" />
-        <path
-            android:strokeColor="#FF0000"
-            android:strokeWidth="1.2"
-            android:pathData="M16,2.5 L16,9.5 M16,22.5 L16,29.5 M2.5,16 L9.5,16 M22.5,16 L29.5,16" />
-    </group>
+    <!-- Cross lines through everything -->
+    <path
+        android:strokeColor="#FF0000"
+        android:strokeWidth="1.5"
+        android:pathData="M24,4 L24,44 M4,24 L44,24" />
+
+    <!-- Central point -->
+    <path
+        android:fillColor="#FF0000"
+        android:pathData="M24,24 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0" />
 </vector>

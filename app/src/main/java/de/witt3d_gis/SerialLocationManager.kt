@@ -21,6 +21,7 @@ data class SerialLocation(
     val satellites: Int? = null,
     val fixType: String? = null,
     val rtkAge: Double? = null,
+    val speed: Double? = null, // in km/h
     val time: Long = System.currentTimeMillis()
 )
 
@@ -199,12 +200,15 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                     val location = SerialLocation(lat, lon, alt, satellites = sats, fixType = fixType, rtkAge = age)
                     mainHandler.post { listener?.onLocationUpdate(location) }
                 }
-            } else if (type.endsWith("RMC") && parts.size >= 7) {
+            } else if (type.endsWith("RMC") && parts.size >= 9) {
                 if (parts.getOrNull(2) == "A") {
                     val lat = parseLatitude(parts.getOrNull(3) ?: "", parts.getOrNull(4) ?: "")
                     val lon = parseLongitude(parts.getOrNull(5) ?: "", parts.getOrNull(6) ?: "")
+                    val knots = parts.getOrNull(7)?.toDoubleOrNull() ?: 0.0
+                    val speedKmH = knots * 1.852
+
                     if (lat != null && lon != null) {
-                        val location = SerialLocation(lat, lon)
+                        val location = SerialLocation(lat, lon, speed = speedKmH)
                         mainHandler.post { listener?.onLocationUpdate(location) }
                     }
                 }
