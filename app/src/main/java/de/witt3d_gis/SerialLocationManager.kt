@@ -219,10 +219,11 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     private fun parseLatitude(latStr: String, hemisphere: String): Double? {
-        if (latStr.isEmpty() || latStr.length < 4) return null
+        val clean = latStr.trim()
+        if (clean.length < 4) return null
         return try {
-            val deg = latStr.substring(0, 2).toDouble()
-            val min = latStr.substring(2).toDouble()
+            val deg = clean.substring(0, 2).toDoubleOrNull() ?: return null
+            val min = clean.substring(2).toDoubleOrNull() ?: return null
             var dec = deg + (min / 60.0)
             if (hemisphere == "S") dec = -dec
             dec
@@ -230,10 +231,11 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     private fun parseLongitude(lonStr: String, hemisphere: String): Double? {
-        if (lonStr.isEmpty() || lonStr.length < 5) return null
+        val clean = lonStr.trim()
+        if (clean.length < 5) return null
         return try {
-            val deg = lonStr.substring(0, 3).toDouble()
-            val min = lonStr.substring(3).toDouble()
+            val deg = clean.substring(0, 3).toDoubleOrNull() ?: return null
+            val min = clean.substring(3).toDoubleOrNull() ?: return null
             var dec = deg + (min / 60.0)
             if (hemisphere == "W") dec = -dec
             dec

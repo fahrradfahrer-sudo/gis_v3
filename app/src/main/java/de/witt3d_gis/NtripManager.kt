@@ -26,6 +26,8 @@ class NtripManager {
     private var lastPass = ""
 
     private var manualGga: String? = null
+    private var lastRtcmTime = 0L
+    private var lastGgaTime = 0L
 
     interface NtripListener {
         fun onRtcmData(data: ByteArray)
@@ -109,6 +111,7 @@ class NtripManager {
                             bytesRead = inputStream.read(buffer)
                             if (bytesRead == -1) break
                             if (bytesRead > 0) {
+                                lastRtcmTime = System.currentTimeMillis()
                                 val data = buffer.copyOfRange(0, bytesRead)
                                 mainHandler.post { listener?.onRtcmData(data) }
                             }
@@ -144,6 +147,13 @@ class NtripManager {
     }
 
     fun sendGga(gga: String) {
+        val now = System.currentTimeMillis()
+        val rtcmAge = now - lastRtcmTime
+        val interval = if (rtcmAge < 10000) 5000L else 1000L // 5s if RTCM ok, 1s if stale/init
+
+        if (now - lastGgaTime < interval) return
+        lastGgaTime = now
+
         val toSend = manualGga ?: gga
         executor.submit {
             try {

@@ -126,6 +126,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val measurePoints = mutableListOf<LatLng>()
     private val drawPoints = mutableListOf<LatLng>()
     private var lastLocation: LatLng? = null
+    private var lastManualMapInteraction = 0L
+    private var targetIconRotation = 0f
     private var currentFeatures = mutableListOf<Feature>()
     private var movingFeature: Feature? = null
     private var movingVertexIndex: Int = -1
@@ -256,6 +258,16 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView.onCreate(savedInstanceState)
         mapView.getMapAsync { mapObj ->
             this.map = mapObj
+
+            mapObj.addOnCameraMoveStartedListener { reason ->
+                if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
+                    lastManualMapInteraction = SystemClock.elapsedRealtime()
+                }
+            }
+
+            mapObj.getStyle { style ->
+                style.addImage("measure-target", ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!)
+            }
             mapView.addOnDidFailLoadingMapListener { error -> updateStatus("Map Error: $error") }
             mapObj.setMaxZoomPreference(32.0)
 
@@ -300,7 +312,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         followSwitch.setOnCheckedChangeListener { _, isChecked ->
             if (::map.isInitialized && map.locationComponent.isLocationComponentActivated) {
                 if (isChecked) {
-                    map.locationComponent.cameraMode = CameraMode.TRACKING
+                    // map.locationComponent.cameraMode = CameraMode.TRACKING // Using custom follow logic instead
+                    map.locationComponent.cameraMode = CameraMode.NONE
+                    Toast.makeText(this, "Smooth Follow ON", Toast.LENGTH_SHORT).show()
                 } else {
                     map.locationComponent.cameraMode = CameraMode.NONE
                 }
@@ -519,6 +533,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         .foregroundDrawable(R.drawable.ic_crosshair)
                         .gpsDrawable(R.drawable.ic_crosshair)
                         .bearingDrawable(R.drawable.ic_crosshair)
+                        .backgroundDrawable(android.R.color.transparent)
                         .accuracyAlpha(0.0f) // Hide accuracy circle
                         .build()
 
@@ -550,9 +565,26 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val passInput = EditText(this).apply { hint = "NTRIP Pass"; setText(prefs.getString("pass", "")) }
 
         val manualGgaCheck = CheckBox(this).apply { text = "Manual Position"; isChecked = prefs.getBoolean("manual_gga_en", false) }
-        val manualLatInput = EditText(this).apply { hint = "Lat (e.g. 49.123)"; setText(prefs.getString("manual_lat", "")); isEnabled = manualGgaCheck.isChecked; inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
-        val manualLonInput = EditText(this).apply { hint = "Lon (e.g. 8.123)"; setText(prefs.getString("manual_lon", "")); isEnabled = manualGgaCheck.isChecked; inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
-        val manualAltInput = EditText(this).apply { hint = "Alt (m)"; setText(prefs.getString("manual_alt", "")); isEnabled = manualGgaCheck.isChecked; inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL }
+
+        var defLat = prefs.getString("manual_lat", "") ?: ""
+        var defLon = prefs.getString("manual_lon", "") ?: ""
+        var defAlt = prefs.getString("manual_alt", "") ?: ""
+
+        if (defLat.isEmpty() || defLon.isEmpty()) {
+            lastLocation?.let {
+                defLat = "%.7f".format(it.latitude)
+                defLon = "%.7f".format(it.longitude)
+                defAlt = lastAlt.toString()
+            } ?: run {
+                defLat = "49.56333"
+                defLon = "8.24750"
+                defAlt = "108.0"
+            }
+        }
+
+        val manualLatInput = EditText(this).apply { hint = "Lat"; setText(defLat); isEnabled = manualGgaCheck.isChecked; inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
+        val manualLonInput = EditText(this).apply { hint = "Lon"; setText(defLon); isEnabled = manualGgaCheck.isChecked; inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
+        val manualAltInput = EditText(this).apply { hint = "Alt (m)"; setText(defAlt); isEnabled = manualGgaCheck.isChecked; inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL }
 
         manualGgaCheck.setOnCheckedChangeListener { _, isChecked ->
             manualLatInput.isEnabled = isChecked
@@ -1786,8 +1818,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             ))
             style.addSource(source)
 
-            style.addLayer(CircleLayer("measure-points", "measure-source").apply {
-                setProperties(PropertyFactory.circleRadius(5f), PropertyFactory.circleColor(Color.YELLOW))
+            style.addLayer(SymbolLayer("measure-points", "measure-source").apply {
+                setProperties(
+                    PropertyFactory.iconImage("measure-target"),
+                    PropertyFactory.iconRotate(targetIconRotation),
+                    PropertyFactory.iconAllowOverlap(true),
+                    PropertyFactory.iconIgnorePlacement(true)
+                )
             })
             if (lineFeature != null) {
                 style.addLayerBelow(LineLayer("measure-line", "measure-source").apply {
@@ -1892,6 +1929,30 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onLocationUpdate(location: SerialLocation) {
         runOnUiThread {
+            if (isMeasureMode) {
+                targetIconRotation = (targetIconRotation + 5f) % 360f
+                map.style?.getLayerAs<SymbolLayer>("measure-points")?.setProperties(PropertyFactory.iconRotate(targetIconRotation))
+            }
+
+            // Custom Smooth Follow Logic
+            if (followSwitch.isChecked && ::map.isInitialized) {
+                val now = SystemClock.elapsedRealtime()
+                // Suspend follow if user interacted recently (5 seconds)
+                if (now - lastManualMapInteraction > 5000) {
+                    val pos = LatLng(location.latitude, location.longitude)
+                    val screenPos = map.projection.toScreenLocation(pos)
+                    val marginX = mapView.width * 0.2f
+                    val marginY = mapView.height * 0.2f
+
+                    val isOutside = screenPos.x < marginX || screenPos.x > (mapView.width - marginX) ||
+                                    screenPos.y < marginY || screenPos.y > (mapView.height - marginY)
+
+                    if (isOutside) {
+                        map.animateCamera(CameraUpdateFactory.newLatLng(pos))
+                    }
+                }
+            }
+
             val fixType = location.fixType ?: "No Fix"
             if (fixType != lastFixType) { fixStatusText.text = fixType; lastFixType = fixType }
 
