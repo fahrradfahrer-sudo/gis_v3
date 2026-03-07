@@ -127,6 +127,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private val drawPoints = mutableListOf<LatLng>()
     private var lastLocation: LatLng? = null
     private var lastManualMapInteraction = 0L
+    private var isRecentlyInteracted = false
     private var targetIconRotation = 0f
     private var currentFeatures = mutableListOf<Feature>()
     private var movingFeature: Feature? = null
@@ -267,6 +268,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             mapObj.getStyle { style ->
                 style.addImage("measure-target", ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!)
+                style.addImage("measure-target-last", ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!.apply { setTint(Color.RED) })
             }
             mapView.addOnDidFailLoadingMapListener { error -> updateStatus("Map Error: $error") }
             mapObj.setMaxZoomPreference(32.0)
@@ -1803,7 +1805,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private fun addMeasurePoint(latLng: LatLng) {
         measurePoints.add(latLng)
-        val features = measurePoints.map { Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude)) }
+        val features = measurePoints.mapIndexed { i, pt ->
+            Feature.fromGeometry(Point.fromLngLat(pt.longitude, pt.latitude)).apply {
+                addBooleanProperty("isLast", i == measurePoints.size - 1)
+            }
+        }
         val lineFeature = if (measurePoints.size >= 2) {
             Feature.fromGeometry(LineString.fromLngLats(measurePoints.map { Point.fromLngLat(it.longitude, it.latitude) }))
         } else null
@@ -1820,8 +1826,20 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             style.addLayer(SymbolLayer("measure-points", "measure-source").apply {
                 setProperties(
-                    PropertyFactory.iconImage("measure-target"),
-                    PropertyFactory.iconRotate(targetIconRotation),
+                    PropertyFactory.iconImage(
+                        org.maplibre.android.style.expressions.Expression.match(
+                            org.maplibre.android.style.expressions.Expression.get("isLast"),
+                            org.maplibre.android.style.expressions.Expression.literal(true), org.maplibre.android.style.expressions.Expression.literal("measure-target-last"),
+                            org.maplibre.android.style.expressions.Expression.literal("measure-target")
+                        )
+                    ),
+                    PropertyFactory.iconRotate(
+                        org.maplibre.android.style.expressions.Expression.match(
+                            org.maplibre.android.style.expressions.Expression.get("isLast"),
+                            org.maplibre.android.style.expressions.Expression.literal(true), org.maplibre.android.style.expressions.Expression.literal(targetIconRotation),
+                            org.maplibre.android.style.expressions.Expression.literal(0f)
+                        )
+                    ),
                     PropertyFactory.iconAllowOverlap(true),
                     PropertyFactory.iconIgnorePlacement(true)
                 )
@@ -1930,27 +1948,35 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     override fun onLocationUpdate(location: SerialLocation) {
         runOnUiThread {
             if (isMeasureMode) {
-                targetIconRotation = (targetIconRotation + 5f) % 360f
+                targetIconRotation = (targetIconRotation + 1f) % 360f
                 map.style?.getLayerAs<SymbolLayer>("measure-points")?.setProperties(PropertyFactory.iconRotate(targetIconRotation))
             }
 
             // Custom Smooth Follow Logic
             if (followSwitch.isChecked && ::map.isInitialized) {
                 val now = SystemClock.elapsedRealtime()
-                // Suspend follow if user interacted recently (5 seconds)
+                val pos = LatLng(location.latitude, location.longitude)
+
                 if (now - lastManualMapInteraction > 5000) {
-                    val pos = LatLng(location.latitude, location.longitude)
-                    val screenPos = map.projection.toScreenLocation(pos)
-                    val marginX = mapView.width * 0.2f
-                    val marginY = mapView.height * 0.2f
-
-                    val isOutside = screenPos.x < marginX || screenPos.x > (mapView.width - marginX) ||
-                                    screenPos.y < marginY || screenPos.y > (mapView.height - marginY)
-
-                    if (isOutside) {
+                    if (isRecentlyInteracted) {
                         map.animateCamera(CameraUpdateFactory.newLatLng(pos))
+                        isRecentlyInteracted = false
+                    } else {
+                        val screenPos = map.projection.toScreenLocation(pos)
+                        val marginX = mapView.width * 0.2f
+                        val marginY = mapView.height * 0.2f
+                        val isOutside = screenPos.x < marginX || screenPos.x > (mapView.width - marginX) ||
+                                        screenPos.y < marginY || screenPos.y > (mapView.height - marginY)
+                        if (isOutside) {
+                            map.animateCamera(CameraUpdateFactory.newLatLng(pos))
+                        }
                     }
+                } else {
+                    isRecentlyInteracted = true
                 }
+            } else if (!followSwitch.isChecked && ::map.isInitialized) {
+                isRecentlyInteracted = false
+                // If follow is OFF, we don't move the map
             }
 
             val fixType = location.fixType ?: "No Fix"
@@ -2025,7 +2051,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
         val gga = "GPGGA,$time,$latStr,$latHem,$lonStr,$lonHem,1,08,0.9,%.2f,M,0.0,M,,".format(java.util.Locale.US, alt)
         var checksum = 0
-        gga.forEach { checksum = checksum xor it.toInt() }
+        gga.forEach { checksum = checksum xor it.code }
         return "\$$gga*%02X".format(checksum)
     }
 
@@ -2062,10 +2088,46 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         updateStatus("Disconnected")
     }
 
-    override fun onStart() { super.onStart(); if (::mapView.isInitialized) mapView.onStart() }
-    override fun onResume() { super.onResume(); if (::mapView.isInitialized) mapView.onResume() }
-    override fun onPause() { super.onPause(); if (::mapView.isInitialized) mapView.onPause() }
-    override fun onStop() { super.onStop(); if (::mapView.isInitialized) mapView.onStop() }
+    override fun onStart() {
+        super.onStart()
+        if (::mapView.isInitialized) {
+            try {
+                mapView.onStart()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error starting MapView", e)
+            }
+        }
+    }
+    override fun onResume() {
+        super.onResume()
+        if (::mapView.isInitialized) {
+            try {
+                mapView.onResume()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resuming MapView", e)
+            }
+        }
+    }
+    override fun onPause() {
+        if (::mapView.isInitialized) {
+            try {
+                mapView.onPause()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error pausing MapView", e)
+            }
+        }
+        super.onPause()
+    }
+    override fun onStop() {
+        if (::mapView.isInitialized) {
+            try {
+                mapView.onStop()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error stopping MapView", e)
+            }
+        }
+        super.onStop()
+    }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); if (::mapView.isInitialized) mapView.onSaveInstanceState(outState) }
     override fun onLowMemory() { super.onLowMemory(); if (::mapView.isInitialized) mapView.onLowMemory() }
     override fun onDestroy() {

@@ -146,7 +146,9 @@ class NtripManager {
         manualGga = gga
     }
 
-    fun sendGga(gga: String) {
+    fun sendGga(gga: String?) {
+        if (gga == null && manualGga == null) return
+
         val now = System.currentTimeMillis()
         val rtcmAge = now - lastRtcmTime
         val interval = if (rtcmAge < 10000) 5000L else 1000L // 5s if RTCM ok, 1s if stale/init
@@ -154,11 +156,11 @@ class NtripManager {
         if (now - lastGgaTime < interval) return
         lastGgaTime = now
 
-        val toSend = manualGga ?: gga
+        val toSend = manualGga ?: gga ?: return
         executor.submit {
             try {
                 val currentSocket = socket
-                if (isRunning && currentSocket?.isConnected == true) {
+                if (isRunning && currentSocket != null && !currentSocket.isClosed && currentSocket.isConnected) {
                     val out = currentSocket.getOutputStream()
                     val msg = if (toSend.endsWith("\r\n")) toSend else "$toSend\r\n"
                     synchronized(out) {
@@ -166,7 +168,9 @@ class NtripManager {
                         out.flush()
                     }
                 }
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "Error sending GGA: ${e.message}")
+            }
         }
     }
 
