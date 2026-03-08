@@ -1,0 +1,18 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="40dp"
+    android:height="40dp"
+    android:viewportWidth="40"
+    android:viewportHeight="40">
+    <!-- Blue target sight for measure tool -->
+    <path
+        android:strokeColor="#0000FF"
+        android:strokeWidth="2"
+        android:pathData="M20,20 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0" />
+    <path
+        android:strokeColor="#0000FF"
+        android:strokeWidth="2"
+        android:pathData="M20,2 L20,12 M20,28 L20,38 M2,20 L12,20 M28,20 L38,20" />
+    <path
+        android:fillColor="#0000FF"
+        android:pathData="M20,20 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0" />
+</vector>

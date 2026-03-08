@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Generic USB-to-Serial filters - these cover many common GNSS/Serial chips -->
+    <!-- FTDI -->
+    <usb-device vendor-id="1027" />
+    <!-- Prolific -->
+    <usb-device vendor-id="1659" />
+    <!-- SiLabs CP210x -->
+    <usb-device vendor-id="4292" />
+    <!-- Qinheng CH34x -->
+    <usb-device vendor-id="6790" />
+    <usb-device vendor-id="1a86" />
+    <!-- u-blox -->
+    <usb-device vendor-id="5446" />
+</resources>
