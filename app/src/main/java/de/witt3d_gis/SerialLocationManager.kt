@@ -141,14 +141,21 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
                 var newlineIndex = buffer.indexOf("\n")
                 while (newlineIndex != -1) {
-                    // Safety check to avoid index out of bounds if string changed between index search and substring
-                    if (newlineIndex < buffer.length) {
-                        val sentence = buffer.substring(0, newlineIndex).trim()
-                        buffer.delete(0, newlineIndex + 1)
-                        if (sentence.startsWith("$")) {
-                            sentenceQueue.offer(sentence)
+                    try {
+                        if (newlineIndex < buffer.length) {
+                            val sentence = buffer.substring(0, newlineIndex).trim()
+                            buffer.delete(0, newlineIndex + 1)
+                            if (sentence.startsWith("$")) {
+                                sentenceQueue.offer(sentence)
+                            }
+                        } else {
+                            buffer.setLength(0)
+                            break
                         }
-                    } else break
+                    } catch (e: Exception) {
+                        buffer.setLength(0)
+                        break
+                    }
                     newlineIndex = buffer.indexOf("\n")
                 }
             }

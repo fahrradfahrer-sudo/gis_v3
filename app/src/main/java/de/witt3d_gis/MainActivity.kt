@@ -155,7 +155,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey",
         "MapLibre Demo" to "https://demotiles.maplibre.org/style.json",
         "OpenStreetMap" to "{\"version\": 8, \"sources\": {\"osm\": {\"type\": \"raster\", \"tiles\": [\"https://a.tile.openstreetmap.org/{z}/{x}/{y}.png\"], \"tileSize\": 256}}, \"layers\": [{\"id\": \"osm\", \"type\": \"raster\", \"source\": \"osm\"}]}",
-        "No Base Map" to "{\"version\": 8, \"sources\": {}, \"layers\": [{\"id\": \"background\", \"type\": \"background\", \"paint\": {\"background-color\": \"#FFFFFF\"}}]}"
+        "No Base Map" to "{\"version\": 8, \"sources\": {\"empty\": {\"type\": \"vector\", \"tiles\": []}}, \"layers\": [{\"id\": \"background\", \"type\": \"background\", \"paint\": {\"background-color\": \"#FFFFFF\"}}]}"
     )
 
     private val usbReceiver = object : BroadcastReceiver() {
@@ -266,10 +266,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 }
             }
 
-            mapObj.getStyle { style ->
-                style.addImage("measure-target", ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!)
-                style.addImage("measure-target-last", ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!.apply { setTint(Color.RED) })
-            }
             mapView.addOnDidFailLoadingMapListener { error -> updateStatus("Map Error: $error") }
             mapObj.setMaxZoomPreference(32.0)
 
@@ -444,16 +440,26 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         updateStatus("Loading style...")
         if (url.startsWith("{")) {
             map.setStyle(Style.Builder().fromJson(url)) { style ->
-                updateStatus("Empty Style Ready")
-                enableLocationComponent(style)
-                refreshWmsLayers()
+                updateStatus("Style Ready")
+                onStyleLoaded(style)
             }
         } else {
             map.setStyle(url) { style ->
-                updateStatus("Map Ready")
-                enableLocationComponent(style)
-                refreshWmsLayers()
+                updateStatus("Style Ready")
+                onStyleLoaded(style)
             }
+        }
+    }
+
+    private fun onStyleLoaded(style: Style) {
+        try {
+            style.addImage("measure-target", ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!)
+            style.addImage("measure-target-last", ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!.apply { setTint(Color.RED) })
+            enableLocationComponent(style)
+            refreshWmsLayers()
+            refreshFeatureLayer()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onStyleLoaded: ${e.message}")
         }
     }
 
@@ -535,7 +541,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         .foregroundDrawable(R.drawable.ic_crosshair)
                         .gpsDrawable(R.drawable.ic_crosshair)
                         .bearingDrawable(R.drawable.ic_crosshair)
-                        .backgroundDrawable(android.R.color.transparent)
+                        .backgroundDrawable(R.drawable.transparent_drawable)
                         .accuracyAlpha(0.0f) // Hide accuracy circle
                         .build()
 
