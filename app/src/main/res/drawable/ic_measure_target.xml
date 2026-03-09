@@ -1,18 +1,16 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="40dp"
-    android:height="40dp"
-    android:viewportWidth="40"
-    android:viewportHeight="40">
-    <!-- Blue target sight for measure tool -->
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Blue target sight for measure tool, made larger and more prominent -->
     <path
         android:strokeColor="#0000FF"
-        android:strokeWidth="2"
-        android:pathData="M20,20 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0" />
+        android:strokeWidth="2.5"
+        android:pathData="M24,24 m-16,0 a16,16 0 1,0 32,0 a16,16 0 1,0 -32,0" />
     <path
         android:strokeColor="#0000FF"
-        android:strokeWidth="2"
-        android:pathData="M20,2 L20,12 M20,28 L20,38 M2,20 L12,20 M28,20 L38,20" />
-    <path
-        android:fillColor="#0000FF"
-        android:pathData="M20,20 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0" />
+        android:strokeWidth="2.5"
+        android:pathData="M24,2 L24,14 M24,34 L24,46 M2,24 L14,24 M34,24 L46,24" />
+    <!-- Empty center as requested for crosshair, applying here too for consistency -->
 </vector>

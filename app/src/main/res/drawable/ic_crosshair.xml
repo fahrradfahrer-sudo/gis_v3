@@ -5,13 +5,13 @@
     android:viewportHeight="48">
     <!-- Circle -->
     <path
-        android:strokeColor="#FF0000"
+        android:strokeColor="#000000"
         android:strokeWidth="1.5"
         android:pathData="M24,24 m-15,0 a15,15 0 1,0 30,0 a15,15 0 1,0 -30,0" />
 
-    <!-- Cross lines through everything -->
+    <!-- Cross lines with gap in center for transparency/visibility -->
     <path
-        android:strokeColor="#FF0000"
+        android:strokeColor="#000000"
         android:strokeWidth="1.5"
-        android:pathData="M24,4 L24,44 M4,24 L44,24" />
+        android:pathData="M24,4 L24,18 M24,30 L24,44 M4,24 L18,24 M30,24 L44,24" />
 </vector>
