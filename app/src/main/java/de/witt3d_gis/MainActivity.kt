@@ -478,10 +478,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private fun onStyleLoaded(style: Style) {
         try {
             style.addImage("measure-target", ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!)
-            style.addImage("measure-target-last", ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!.apply { setTint(Color.RED) })
+            style.addImage("measure-target-last", ContextCompat.getDrawable(this, R.drawable.ic_measure_target_last)!!)
+            style.addImage("info-icon", ContextCompat.getDrawable(this, R.drawable.ic_info)!!)
             enableLocationComponent(style)
             refreshWmsLayers()
             refreshFeatureLayer()
+            if (isMeasureMode) {
+                // Re-add measure points if they exist
+                addMeasurePoint(null)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error in onStyleLoaded: ${e.message}")
         }
@@ -503,8 +508,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
         }
 
-        // Add enabled layers in reverse order (so the first in list is on top)
-        wmsLayers.filter { it.enabled }.reversed().forEachIndexed { index, config ->
+        // Add enabled layers in correct order.
+        // By adding wmsLayers[0] first (below labels) and subsequent layers below the previous one,
+        // we ensure that the first item in the list is visually on top of the others.
+        wmsLayers.filter { it.enabled }.forEachIndexed { index, config ->
             try {
                 var finalWmsUrl = config.url.trim()
                 if (finalWmsUrl.contains("SERVICE=WMS", ignoreCase = true)) {
@@ -763,6 +770,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 setOnClickListener { showWmsEditDialog(config) }
             }
 
+            val editBtn = androidx.appcompat.widget.AppCompatImageButton(this).apply {
+                setImageResource(R.drawable.ic_edit)
+                setBackgroundResource(android.R.color.transparent)
+                layoutParams = LinearLayout.LayoutParams(60, 60)
+                setPadding(10, 10, 10, 10)
+                scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                setOnClickListener { showWmsEditDialog(config) }
+            }
+
             val upBtn = Button(this).apply {
                 text = "↑"
                 setPadding(0,0,0,0)
@@ -798,7 +814,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 }
             }
 
-            row.addView(cb); row.addView(title); row.addView(upBtn); row.addView(downBtn); row.addView(deleteBtn)
+            row.addView(cb); row.addView(title); row.addView(editBtn); row.addView(upBtn); row.addView(downBtn); row.addView(deleteBtn)
             wmsLayerContainer.addView(row)
         }
     }
@@ -1332,9 +1348,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             // Circle for points
             val circleLayer = CircleLayer("import-circle-layer", "import-source")
             circleLayer.setProperties(
-                PropertyFactory.circleRadius(3f),
+                PropertyFactory.circleRadius(5f),
                 PropertyFactory.circleColor(Color.RED),
-                PropertyFactory.circleStrokeWidth(1f),
+                PropertyFactory.circleStrokeWidth(2f),
                 PropertyFactory.circleStrokeColor(Color.WHITE)
             )
             style.addLayer(circleLayer)
@@ -1343,18 +1359,35 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             labelLayer.setProperties(
                 PropertyFactory.textField(
                     org.maplibre.android.style.expressions.Expression.coalesce(
-                        org.maplibre.android.style.expressions.Expression.get("notes"),
                         org.maplibre.android.style.expressions.Expression.get("name"),
                         org.maplibre.android.style.expressions.Expression.literal("")
                     )
                 ),
-                PropertyFactory.textSize(12f),
-                PropertyFactory.textOffset(arrayOf(0f, 1.2f)),
+                PropertyFactory.textSize(14f),
+                PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
                 PropertyFactory.textColor(Color.BLACK),
                 PropertyFactory.textHaloColor(Color.WHITE),
-                PropertyFactory.textHaloWidth(1.5f)
+                PropertyFactory.textHaloWidth(2.0f)
             )
             style.addLayer(labelLayer)
+
+            val infoLayer = SymbolLayer("import-info-layer", "import-source")
+            infoLayer.setProperties(
+                PropertyFactory.iconImage("info-icon"),
+                PropertyFactory.iconSize(0.6f),
+                PropertyFactory.iconOffset(arrayOf(25f, -15f)),
+                PropertyFactory.iconOpacity(
+                    org.maplibre.android.style.expressions.Expression.match(
+                        org.maplibre.android.style.expressions.Expression.coalesce(
+                            org.maplibre.android.style.expressions.Expression.get("notes"),
+                            org.maplibre.android.style.expressions.Expression.literal("")
+                        ),
+                        org.maplibre.android.style.expressions.Expression.literal(""), org.maplibre.android.style.expressions.Expression.literal(0f),
+                        org.maplibre.android.style.expressions.Expression.literal(1f)
+                    )
+                )
+            )
+            style.addLayer(infoLayer)
         }
     }
 
@@ -1553,12 +1586,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             Toast.makeText(this, getString(R.string.no_gnss_pos), Toast.LENGTH_SHORT).show()
             return
         }
+        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 20, 60, 0) }
+        val nameInput = EditText(this).apply { hint = getString(R.string.name) }
         val notesInput = EditText(this).apply { hint = getString(R.string.notes) }
+        layout.addView(nameInput); layout.addView(notesInput)
+
         AlertDialog.Builder(this)
             .setTitle(R.string.add_pt_gnss)
-            .setView(notesInput)
+            .setView(layout)
             .setPositiveButton(R.string.save) { _, _ ->
                 val f = Feature.fromGeometry(Point.fromLngLat(loc.longitude, loc.latitude))
+                f.addStringProperty("name", nameInput.text.toString())
                 f.addStringProperty("notes", notesInput.text.toString())
                 currentFeatures.add(f)
                 refreshFeatureLayer()
@@ -1571,12 +1609,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private fun handleDrawingClick(latLng: LatLng) {
         when(drawingMode) {
             1 -> {
+                val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 20, 60, 0) }
+                val nameInput = EditText(this).apply { hint = getString(R.string.name) }
                 val notesInput = EditText(this).apply { hint = getString(R.string.notes) }
+                layout.addView(nameInput); layout.addView(notesInput)
+
                 AlertDialog.Builder(this)
                     .setTitle(R.string.draw_pt)
-                    .setView(notesInput)
+                    .setView(layout)
                     .setPositiveButton(R.string.save) { _, _ ->
                         val f = Feature.fromGeometry(Point.fromLngLat(latLng.longitude, latLng.latitude))
+                        f.addStringProperty("name", nameInput.text.toString())
                         f.addStringProperty("notes", notesInput.text.toString())
                         currentFeatures.add(f)
                         refreshFeatureLayer()
@@ -1614,12 +1657,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private fun finishLine() {
         if (drawPoints.size >= 2) {
+            val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 20, 60, 0) }
+            val nameInput = EditText(this).apply { hint = getString(R.string.name) }
             val notesInput = EditText(this).apply { hint = getString(R.string.notes) }
+            layout.addView(nameInput); layout.addView(notesInput)
+
             AlertDialog.Builder(this)
                 .setTitle(R.string.draw_line)
-                .setView(notesInput)
+                .setView(layout)
                 .setPositiveButton(R.string.save) { _, _ ->
                     val f = Feature.fromGeometry(LineString.fromLngLats(drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) }))
+                    f.addStringProperty("name", nameInput.text.toString())
                     f.addStringProperty("notes", notesInput.text.toString())
                     currentFeatures.add(f)
                     drawPoints.clear()
@@ -1645,14 +1693,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private fun finishPoly() {
         if (drawPoints.size >= 3) {
+            val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 20, 60, 0) }
+            val nameInput = EditText(this).apply { hint = getString(R.string.name) }
             val notesInput = EditText(this).apply { hint = getString(R.string.notes) }
+            layout.addView(nameInput); layout.addView(notesInput)
+
             AlertDialog.Builder(this)
                 .setTitle(R.string.draw_poly)
-                .setView(notesInput)
+                .setView(layout)
                 .setPositiveButton(R.string.save) { _, _ ->
                     val pts = drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) }.toMutableList()
                     pts.add(pts[0]) // Close
                     val f = Feature.fromGeometry(Polygon.fromLngLats(listOf(pts)))
+                    f.addStringProperty("name", nameInput.text.toString())
                     f.addStringProperty("notes", notesInput.text.toString())
                     currentFeatures.add(f)
                     drawPoints.clear()
@@ -1730,10 +1783,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 setPadding(60, 40, 60, 10)
             }
 
+            val nameInput = EditText(this).apply {
+                setText(f.getStringProperty("name") ?: "")
+                hint = getString(R.string.name)
+            }
             val notesInput = EditText(this).apply {
-                setText(f.getStringProperty("notes") ?: f.getStringProperty("name") ?: "")
+                setText(f.getStringProperty("notes") ?: "")
                 hint = getString(R.string.notes)
             }
+            dialogView.addView(nameInput)
             dialogView.addView(notesInput)
 
             val buttonRow1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -1774,9 +1832,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val saveBtn = Button(this).apply {
                 text = getString(R.string.save)
                 setOnClickListener {
+                    f.addStringProperty("name", nameInput.text.toString())
                     f.addStringProperty("notes", notesInput.text.toString())
                     refreshFeatureLayer()
-                    Toast.makeText(this@MainActivity, getString(R.string.point_added), Toast.LENGTH_SHORT).show()
                     alertDialog.dismiss()
                 }
             }
@@ -2022,8 +2080,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
     }
 
-    private fun addMeasurePoint(latLng: LatLng) {
-        measurePoints.add(latLng)
+    private fun addMeasurePoint(latLng: LatLng?) {
+        if (latLng != null) measurePoints.add(latLng)
         val features = measurePoints.mapIndexed { i, pt ->
             Feature.fromGeometry(Point.fromLngLat(pt.longitude, pt.latitude)).apply {
                 addBooleanProperty("isLast", i == measurePoints.size - 1)

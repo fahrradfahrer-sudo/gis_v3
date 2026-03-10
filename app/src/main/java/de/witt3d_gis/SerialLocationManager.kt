@@ -33,8 +33,9 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private val sentenceQueue = LinkedBlockingQueue<String>()
-    private var buffer = StringBuilder()
+    private val sentenceQueue = LinkedBlockingQueue<Any>() // Can be String (NMEA) or ByteArray (UBX)
+    private var byteBuffer = ByteArray(4096)
+    private var byteBufferPos = 0
     private var isProcessing = false
 
     interface LocationListener {
@@ -88,9 +89,10 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
         executor.submit {
             while (isProcessing) {
                 try {
-                    val sentence = sentenceQueue.poll(500, TimeUnit.MILLISECONDS)
-                    if (sentence != null) {
-                        parseNmea(sentence)
+                    val item = sentenceQueue.poll(500, TimeUnit.MILLISECONDS)
+                    when (item) {
+                        is String -> parseNmea(item)
+                        is ByteArray -> parseUbx(item)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Worker error", e)
@@ -133,40 +135,114 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     override fun onNewData(data: ByteArray) {
-        try {
-            val str = String(data, Charsets.US_ASCII)
-            synchronized(buffer) {
-                if (buffer.length > 16384) buffer.setLength(0)
-                buffer.append(str)
-
-                var newlineIndex = buffer.indexOf("\n")
-                while (newlineIndex != -1) {
-                    try {
-                        if (newlineIndex < buffer.length) {
-                            val sentence = buffer.substring(0, newlineIndex).trim()
-                            buffer.delete(0, newlineIndex + 1)
-                            if (sentence.startsWith("$")) {
-                                sentenceQueue.offer(sentence)
-                            }
-                        } else {
-                            buffer.setLength(0)
-                            break
-                        }
-                    } catch (e: Exception) {
-                        buffer.setLength(0)
-                        break
-                    }
-                    newlineIndex = buffer.indexOf("\n")
+        synchronized(byteBuffer) {
+            if (byteBufferPos + data.size > byteBuffer.size) {
+                // Grow or reset
+                if (byteBuffer.size < 65536) {
+                    byteBuffer = byteBuffer.copyOf(byteBuffer.size * 2)
+                } else {
+                    byteBufferPos = 0 // Emergency reset
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "NMEA Buffer Error", e)
+            System.arraycopy(data, 0, byteBuffer, byteBufferPos, data.size)
+            byteBufferPos += data.size
+
+            var i = 0
+            while (i < byteBufferPos) {
+                if (byteBuffer[i] == '$'.toByte()) {
+                    // Possible NMEA
+                    val end = findNewline(i)
+                    if (end != -1) {
+                        val sentence = String(byteBuffer, i, end - i, Charsets.US_ASCII).trim()
+                        sentenceQueue.offer(sentence)
+                        i = end + 1
+                        continue
+                    } else break // Wait for more data
+                } else if (i + 1 < byteBufferPos && byteBuffer[i] == 0xB5.toByte() && byteBuffer[i+1] == 0x62.toByte()) {
+                    // Possible UBX
+                    if (i + 6 <= byteBufferPos) {
+                        val len = (byteBuffer[i+4].toInt() and 0xFF) or ((byteBuffer[i+5].toInt() and 0xFF) shl 8)
+                        val totalLen = len + 8
+                        if (i + totalLen <= byteBufferPos) {
+                            val msg = byteBuffer.copyOfRange(i, i + totalLen)
+                            sentenceQueue.offer(msg)
+                            i += totalLen
+                            continue
+                        } else break // Wait for full msg
+                    } else break // Wait for header
+                }
+                i++
+            }
+
+            if (i > 0) {
+                if (i < byteBufferPos) {
+                    System.arraycopy(byteBuffer, i, byteBuffer, 0, byteBufferPos - i)
+                    byteBufferPos -= i
+                } else {
+                    byteBufferPos = 0
+                }
+            }
         }
+    }
+
+    private fun findNewline(start: Int): Int {
+        for (i in start until byteBufferPos) {
+            if (byteBuffer[i] == '\n'.toByte()) return i
+        }
+        return -1
     }
 
     override fun onRunError(e: Exception) {
         sendError("Serial Error: ${e.message}")
         disconnect()
+    }
+
+    private fun parseUbx(data: ByteArray) {
+        if (data.size < 8) return
+        val cls = data[2].toInt() and 0xFF
+        val id = data[3].toInt() and 0xFF
+
+        if (cls == 0x01 && id == 0x07) { // NAV-PVT
+            val payload = data.sliceArray(6 until data.size - 2)
+            if (payload.size < 84) return
+
+            val fixTypeRaw = payload[20].toInt() and 0xFF
+            val flags = payload[21].toInt() and 0xFF
+            val numSV = payload[23].toInt() and 0xFF
+            val lon = readInt32(payload, 24) / 1e7
+            val lat = readInt32(payload, 28) / 1e7
+            val hMSL = readInt32(payload, 36) / 1000.0
+            val gSpeed = readInt32(payload, 60) / 1000.0 * 3.6 // mm/s to km/h
+            val acc = readUInt32(payload, 40) / 1000.0f // hAcc in m
+
+            val fixType = when (fixTypeRaw) {
+                2 -> "2D Fix"
+                3 -> "3D Fix"
+                4 -> "GNSS+DR"
+                else -> "No Fix"
+            }
+
+            val rtkFixed = (flags and 0x80) != 0
+            val rtkFloat = (flags and 0x40) != 0
+            val finalFix = if (rtkFixed) "RTK" else if (rtkFloat) "FRTK" else fixType
+
+            val location = SerialLocation(lat, lon, hMSL, accuracy = acc, satellites = numSV, fixType = finalFix, speed = gSpeed)
+            mainHandler.post { listener?.onLocationUpdate(location) }
+        }
+    }
+
+    private fun readInt32(data: ByteArray, offset: Int): Int {
+        return (data[offset].toInt() and 0xFF) or
+               ((data[offset + 1].toInt() and 0xFF) shl 8) or
+               ((data[offset + 2].toInt() and 0xFF) shl 16) or
+               ((data[offset + 3].toInt() and 0xFF) shl 24)
+    }
+
+    private fun readUInt32(data: ByteArray, offset: Int): Long {
+        return ((data[offset].toLong() and 0xFF)) or
+               ((data[offset + 1].toLong() and 0xFF) shl 8) or
+               ((data[offset + 2].toLong() and 0xFF) shl 16) or
+               ((data[offset + 3].toLong() and 0xFF) shl 24)
     }
 
     private fun parseNmea(sentence: String) {

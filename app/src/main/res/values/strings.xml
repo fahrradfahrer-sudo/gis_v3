@@ -28,6 +28,7 @@
     <string name="export_data">Export Data (GeoJSON)</string>
     <string name="display_settings">Display Settings</string>
     <string name="relative_scale">Relative Scale (1:X)</string>
+    <string name="name">Name</string>
     <string name="notes">Notes</string>
     <string name="save">Save</string>
     <string name="cancel">Cancel</string>
