@@ -475,11 +475,20 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
     }
 
+    private fun drawableToBitmap(drawable: android.graphics.drawable.Drawable): android.graphics.Bitmap {
+        if (drawable is android.graphics.drawable.BitmapDrawable) return drawable.bitmap
+        val bitmap = android.graphics.Bitmap.createBitmap(drawable.intrinsicWidth.coerceAtLeast(1), drawable.intrinsicHeight.coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        return bitmap
+    }
+
     private fun onStyleLoaded(style: Style) {
         try {
-            style.addImage("measure-target", ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!)
-            style.addImage("measure-target-last", ContextCompat.getDrawable(this, R.drawable.ic_measure_target_last)!!)
-            style.addImage("info-icon", ContextCompat.getDrawable(this, R.drawable.ic_info)!!)
+            style.addImage("measure-target", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!))
+            style.addImage("measure-target-last", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_measure_target_last)!!))
+            style.addImage("info-icon", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_info)!!))
             enableLocationComponent(style)
             refreshWmsLayers()
             refreshFeatureLayer()
@@ -509,9 +518,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
 
         // Add enabled layers in correct order.
-        // By adding wmsLayers[0] first (below labels) and subsequent layers below the previous one,
-        // we ensure that the first item in the list is visually on top of the others.
-        wmsLayers.filter { it.enabled }.forEachIndexed { index, config ->
+        // The last layer added to the map appears on top of previous layers.
+        // To make wmsLayers[0] the top layer, we add it LAST.
+        wmsLayers.filter { it.enabled }.reversed().forEachIndexed { index, config ->
             try {
                 var finalWmsUrl = config.url.trim()
                 if (finalWmsUrl.contains("SERVICE=WMS", ignoreCase = true)) {
@@ -1318,76 +1327,87 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun refreshFeatureLayer() {
-        map.style?.let { style ->
-            style.removeLayer("import-circle-layer")
-            style.removeLayer("import-label-layer")
-            style.removeLayer("import-line-layer")
-            style.removeLayer("import-fill-layer")
-            style.removeLayer("import-layer")
-            style.removeSource("import-source")
+        val style = map.style ?: return
+        try {
+            val collection = FeatureCollection.fromFeatures(currentFeatures)
+            val source = style.getSource("import-source") as? GeoJsonSource
+            if (source != null) {
+                source.setGeoJson(collection)
+            } else {
+                style.addSource(GeoJsonSource("import-source", collection))
+            }
 
-            val source = GeoJsonSource("import-source", FeatureCollection.fromFeatures(currentFeatures))
-            style.addSource(source)
-
-            // Polygon fill
-            val fillLayer = FillLayer("import-fill-layer", "import-source")
-            fillLayer.setProperties(
-                PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
-                PropertyFactory.fillOutlineColor(Color.RED)
-            )
-            style.addLayer(fillLayer)
-
-            // Line layer
-            val lineLayer = LineLayer("import-line-layer", "import-source")
-            lineLayer.setProperties(
-                PropertyFactory.lineColor(Color.RED),
-                PropertyFactory.lineWidth(2f)
-            )
-            style.addLayer(lineLayer)
-
-            // Circle for points
-            val circleLayer = CircleLayer("import-circle-layer", "import-source")
-            circleLayer.setProperties(
-                PropertyFactory.circleRadius(5f),
-                PropertyFactory.circleColor(Color.RED),
-                PropertyFactory.circleStrokeWidth(2f),
-                PropertyFactory.circleStrokeColor(Color.WHITE)
-            )
-            style.addLayer(circleLayer)
-
-            val labelLayer = SymbolLayer("import-label-layer", "import-source")
-            labelLayer.setProperties(
-                PropertyFactory.textField(
-                    org.maplibre.android.style.expressions.Expression.coalesce(
-                        org.maplibre.android.style.expressions.Expression.get("name"),
-                        org.maplibre.android.style.expressions.Expression.literal("")
+            if (style.getLayer("import-fill-layer") == null) {
+                style.addLayer(FillLayer("import-fill-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
+                        PropertyFactory.fillOutlineColor(Color.RED)
                     )
-                ),
-                PropertyFactory.textSize(14f),
-                PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
-                PropertyFactory.textColor(Color.BLACK),
-                PropertyFactory.textHaloColor(Color.WHITE),
-                PropertyFactory.textHaloWidth(2.0f)
-            )
-            style.addLayer(labelLayer)
-
-            val infoLayer = SymbolLayer("import-info-layer", "import-source")
-            infoLayer.setProperties(
-                PropertyFactory.iconImage("info-icon"),
-                PropertyFactory.iconSize(0.6f),
-                PropertyFactory.iconOffset(arrayOf(25f, -15f)),
-                PropertyFactory.iconOpacity(
-                    org.maplibre.android.style.expressions.Expression.match(
-                        org.maplibre.android.style.expressions.Expression.coalesce(
-                            org.maplibre.android.style.expressions.Expression.get("notes"),
-                            org.maplibre.android.style.expressions.Expression.literal("")
+                })
+            }
+            if (style.getLayer("import-line-layer") == null) {
+                style.addLayer(LineLayer("import-line-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.lineColor(Color.RED),
+                        PropertyFactory.lineWidth(2f)
+                    )
+                })
+            }
+            if (style.getLayer("import-circle-layer") == null) {
+                style.addLayer(CircleLayer("import-circle-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.circleRadius(6f),
+                        PropertyFactory.circleColor(Color.RED),
+                        PropertyFactory.circleStrokeWidth(2f),
+                        PropertyFactory.circleStrokeColor(Color.WHITE)
+                    )
+                })
+            }
+            if (style.getLayer("import-label-layer") == null) {
+                style.addLayer(SymbolLayer("import-label-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.textField(org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))),
+                        PropertyFactory.textSize(14f),
+                        PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
+                        PropertyFactory.textColor(Color.BLACK),
+                        PropertyFactory.textHaloColor(Color.WHITE),
+                        PropertyFactory.textHaloWidth(2.0f),
+                        PropertyFactory.textAllowOverlap(true),
+                        PropertyFactory.textIgnorePlacement(true)
+                    )
+                })
+            }
+            if (style.getLayer("import-info-layer") == null) {
+                style.addLayer(SymbolLayer("import-info-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.iconImage("info-icon"),
+                        PropertyFactory.iconSize(0.6f),
+                        PropertyFactory.iconOffset(arrayOf(25f, -15f)),
+                        PropertyFactory.iconOpacity(
+                            org.maplibre.android.style.expressions.Expression.switchCase(
+                                org.maplibre.android.style.expressions.Expression.all(
+                                    org.maplibre.android.style.expressions.Expression.has("notes"),
+                                    org.maplibre.android.style.expressions.Expression.neq(org.maplibre.android.style.expressions.Expression.get("notes"), org.maplibre.android.style.expressions.Expression.literal(""))
+                                ),
+                                org.maplibre.android.style.expressions.Expression.literal(1f),
+                                org.maplibre.android.style.expressions.Expression.literal(0f)
+                            )
                         ),
-                        org.maplibre.android.style.expressions.Expression.literal(""), org.maplibre.android.style.expressions.Expression.literal(0f),
-                        org.maplibre.android.style.expressions.Expression.literal(1f)
+                        PropertyFactory.iconAllowOverlap(true),
+                        PropertyFactory.iconIgnorePlacement(true)
                     )
-                )
-            )
-            style.addLayer(infoLayer)
+                })
+            }
+
+            // Bring to front
+            listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer", "import-info-layer").forEach { id ->
+                style.getLayer(id)?.let {
+                    style.removeLayer(id)
+                    style.addLayer(it)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in refreshFeatureLayer: ${e.message}")
         }
     }
 
@@ -1638,9 +1658,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private fun updateTempDrawing() {
         val style = map.style ?: return
-        style.removeLayer("temp-draw-layer")
-        style.removeSource("temp-draw-source")
-        if (drawPoints.isEmpty()) return
+
+        if (drawPoints.isEmpty()) {
+            style.removeLayer("temp-draw-layer")
+            style.removeSource("temp-draw-source")
+            return
+        }
 
         val features = mutableListOf<Feature>()
         drawPoints.forEach { features.add(Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude))) }
@@ -1648,11 +1671,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             features.add(Feature.fromGeometry(LineString.fromLngLats(drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) })))
         }
 
-        val source = GeoJsonSource("temp-draw-source", FeatureCollection.fromFeatures(features))
-        style.addSource(source)
-        style.addLayer(LineLayer("temp-draw-layer", "temp-draw-source").apply {
-            setProperties(PropertyFactory.lineColor(Color.BLUE), PropertyFactory.lineWidth(2f))
-        })
+        val collection = FeatureCollection.fromFeatures(features)
+        val source = style.getSourceAs<GeoJsonSource>("temp-draw-source")
+        if (source != null) {
+            source.setGeoJson(collection)
+        } else {
+            style.addSource(GeoJsonSource("temp-draw-source", collection))
+        }
+
+        if (style.getLayer("temp-draw-layer") == null) {
+            style.addLayer(LineLayer("temp-draw-layer", "temp-draw-source").apply {
+                setProperties(PropertyFactory.lineColor(Color.BLUE), PropertyFactory.lineWidth(2f))
+            })
+        }
     }
 
     private fun finishLine() {
@@ -2082,53 +2113,78 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private fun addMeasurePoint(latLng: LatLng?) {
         if (latLng != null) measurePoints.add(latLng)
-        val features = measurePoints.mapIndexed { i, pt ->
-            Feature.fromGeometry(Point.fromLngLat(pt.longitude, pt.latitude)).apply {
-                addBooleanProperty("isLast", i == measurePoints.size - 1)
+        val style = map.style ?: return
+        try {
+            val features = measurePoints.mapIndexed { i, pt ->
+                Feature.fromGeometry(Point.fromLngLat(pt.longitude, pt.latitude)).apply {
+                    addBooleanProperty("isLast", i == measurePoints.size - 1)
+                }
             }
-        }
-        val lineFeature = if (measurePoints.size >= 2) {
-            Feature.fromGeometry(LineString.fromLngLats(measurePoints.map { Point.fromLngLat(it.longitude, it.latitude) }))
-        } else null
+            val lineFeature = if (measurePoints.size >= 2) {
+                Feature.fromGeometry(LineString.fromLngLats(measurePoints.map { Point.fromLngLat(it.longitude, it.latitude) }))
+            } else null
 
-        map.style?.let { style ->
-            style.removeLayer("measure-line")
-            style.removeLayer("measure-points")
-            style.removeSource("measure-source")
+            val collection = FeatureCollection.fromFeatures(if (lineFeature != null) features + lineFeature else features)
+            val source = style.getSource("measure-source") as? GeoJsonSource
+            if (source != null) {
+                source.setGeoJson(collection)
+            } else {
+                style.addSource(GeoJsonSource("measure-source", collection))
+            }
 
-            val source = GeoJsonSource("measure-source", FeatureCollection.fromFeatures(
-                if (lineFeature != null) features + lineFeature else features
-            ))
-            style.addSource(source)
+            if (style.getLayer("measure-points") == null) {
+                style.addLayer(SymbolLayer("measure-points", "measure-source"))
+            }
+            val measureLayer = style.getLayer("measure-points") as SymbolLayer
+            measureLayer.setProperties(
+                PropertyFactory.iconImage(
+                    org.maplibre.android.style.expressions.Expression.switchCase(
+                        org.maplibre.android.style.expressions.Expression.get("isLast"), org.maplibre.android.style.expressions.Expression.literal("measure-target-last"),
+                        org.maplibre.android.style.expressions.Expression.literal("measure-target")
+                    )
+                ),
+                PropertyFactory.iconRotate(
+                    org.maplibre.android.style.expressions.Expression.switchCase(
+                        org.maplibre.android.style.expressions.Expression.get("isLast"), org.maplibre.android.style.expressions.Expression.literal(targetIconRotation),
+                        org.maplibre.android.style.expressions.Expression.literal(0f)
+                    )
+                ),
+                PropertyFactory.iconAllowOverlap(true),
+                PropertyFactory.iconIgnorePlacement(true),
+                PropertyFactory.iconSize(1.5f)
+            )
 
-            style.addLayer(SymbolLayer("measure-points", "measure-source").apply {
-                setProperties(
-                    PropertyFactory.iconImage(
-                        org.maplibre.android.style.expressions.Expression.match(
-                            org.maplibre.android.style.expressions.Expression.get("isLast"),
-                            org.maplibre.android.style.expressions.Expression.literal(true), org.maplibre.android.style.expressions.Expression.literal("measure-target-last"),
-                            org.maplibre.android.style.expressions.Expression.literal("measure-target")
-                        )
-                    ),
-                    PropertyFactory.iconRotate(
-                        org.maplibre.android.style.expressions.Expression.match(
-                            org.maplibre.android.style.expressions.Expression.get("isLast"),
-                            org.maplibre.android.style.expressions.Expression.literal(true), org.maplibre.android.style.expressions.Expression.literal(targetIconRotation),
-                            org.maplibre.android.style.expressions.Expression.literal(0f)
-                        )
-                    ),
-                    PropertyFactory.iconAllowOverlap(true),
-                    PropertyFactory.iconIgnorePlacement(true),
-                    PropertyFactory.iconSize(1.5f)
-                )
-            })
-            if (lineFeature != null) {
-                style.addLayerBelow(LineLayer("measure-line", "measure-source").apply {
-                    setProperties(PropertyFactory.lineColor(Color.YELLOW), PropertyFactory.lineWidth(3f))
+            // FALLBACK for visibility: CircleLayer for measurement points
+            if (style.getLayer("measure-circles") == null) {
+                style.addLayerBelow(CircleLayer("measure-circles", "measure-source").apply {
+                    setProperties(
+                        PropertyFactory.circleRadius(5f),
+                        PropertyFactory.circleColor(Color.BLUE),
+                        PropertyFactory.circleStrokeWidth(2f),
+                        PropertyFactory.circleStrokeColor(Color.WHITE)
+                    )
                 }, "measure-points")
             }
-        }
 
+            if (lineFeature != null) {
+                if (style.getLayer("measure-line") == null) {
+                    style.addLayerBelow(LineLayer("measure-line", "measure-source"), "measure-circles")
+                }
+                val lineLayer = style.getLayer("measure-line") as LineLayer
+                lineLayer.setProperties(PropertyFactory.lineColor(Color.YELLOW), PropertyFactory.lineWidth(3f))
+            } else {
+                style.removeLayer("measure-line")
+            }
+
+            // Bring measure points to very top
+            style.removeLayer("measure-circles")
+            style.removeLayer("measure-points")
+            style.addLayer(style.getLayer("measure-circles") ?: CircleLayer("measure-circles", "measure-source"))
+            style.addLayer(measureLayer)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in addMeasurePoint: ${e.message}")
+        }
         calculateMeasureResult()
     }
 
