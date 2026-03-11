@@ -42,6 +42,7 @@
     <string name="ntrip_user">NTRIP User</string>
     <string name="ntrip_pass">NTRIP Pass</string>
     <string name="manual_position">Manual Position</string>
+    <string name="skyplot">Skyplot</string>
     <string name="wms_url">WMS URL</string>
     <string name="wms_layers_hint">WMS Layers (e.g. layer1,layer2)</string>
     <string name="search">Search</string>

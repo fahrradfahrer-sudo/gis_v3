@@ -134,6 +134,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private var currentFeatures = mutableListOf<Feature>()
     private var movingFeature: Feature? = null
     private var movingVertexIndex: Int = -1
+    private var currentSats = listOf<SatInfo>()
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
@@ -152,10 +153,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private val mapStyles = listOf(
-        "MapTiler Basic" to "https://api.maptiler.com/maps/basic/style.json?key=$apiKey",
-        "OSM Bright" to "https://api.maptiler.com/maps/bright/style.json?key=$apiKey",
-        "Toner" to "https://api.maptiler.com/maps/toner/style.json?key=$apiKey",
-        "MapLibre Demo" to "https://demotiles.maplibre.org/style.json",
+        "Google Maps" to "{\"version\": 8, \"sources\": {\"google\": {\"type\": \"raster\", \"tiles\": [\"https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}\"], \"tileSize\": 256}}, \"layers\": [{\"id\": \"google\", \"type\": \"raster\", \"source\": \"google\"}]}",
+        "Google Satellite" to "{\"version\": 8, \"sources\": {\"google-sat\": {\"type\": \"raster\", \"tiles\": [\"https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}\"], \"tileSize\": 256}}, \"layers\": [{\"id\": \"google-sat\", \"type\": \"raster\", \"source\": \"google-sat\"}]}",
         "OpenStreetMap" to "{\"version\": 8, \"sources\": {\"osm\": {\"type\": \"raster\", \"tiles\": [\"https://a.tile.openstreetmap.org/{z}/{x}/{y}.png\"], \"tileSize\": 256}}, \"layers\": [{\"id\": \"osm\", \"type\": \"raster\", \"source\": \"osm\"}]}",
         "No Base Map" to "{\"version\": 8, \"sources\": {\"empty\": {\"type\": \"vector\", \"tiles\": []}}, \"layers\": [{\"id\": \"background\", \"type\": \"background\", \"paint\": {\"background-color\": \"#FFFFFF\"}}]}"
     )
@@ -735,6 +734,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
             .setNegativeButton(R.string.cancel, null)
             .setNeutralButton(R.string.stop_ntrip) { _, _ -> ntripManager.disconnect() }
+            .setNeutralButton(R.string.skyplot) { _, _ -> showSkyplotDialog() }
+            .show()
+    }
+
+    private fun showSkyplotDialog() {
+        val skyView = SkyplotView(this)
+        skyView.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 800)
+        skyView.setSatellites(currentSats)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.skyplot)
+            .setView(skyView)
+            .setPositiveButton("OK", null)
             .show()
     }
 
@@ -1095,7 +1107,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     else -> "shp"
                 }
                 if (lastExportFormat == "shp") {
-                    folderPicker.launch(null)
+                    val nameInput = EditText(this).apply { hint = "Filename (base)"; setText("export_${System.currentTimeMillis()}") }
+                    AlertDialog.Builder(this)
+                        .setTitle("Export Shapefile")
+                        .setView(nameInput)
+                        .setPositiveButton("Select Folder & Export") { _, _ ->
+                            val baseName = nameInput.text.toString().trim().ifEmpty { "export_${System.currentTimeMillis()}" }
+                            getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit().putString("last_shp_name", baseName).apply()
+                            folderPicker.launch(null)
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
                 } else {
                     val ext = if (lastExportFormat == "geojson") "json" else lastExportFormat
                     exportPicker.launch("export_data_${System.currentTimeMillis()}.$ext")
@@ -1128,7 +1150,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         executor.submit {
             try {
                 val pickedDir = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, folderUri) ?: return@submit
-                val baseName = "export_${System.currentTimeMillis()}"
+                val baseName = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getString("last_shp_name", "export_${System.currentTimeMillis()}") ?: "export"
 
                 val points = currentFeatures.filter { it.geometry() is Point }
                 val lines = currentFeatures.filter { it.geometry() is LineString }
@@ -1329,7 +1351,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private fun refreshFeatureLayer() {
         val style = map.style ?: return
         try {
-            val collection = FeatureCollection.fromFeatures(currentFeatures)
+            // Clone list to avoid ConcurrentModificationException or stale state issues
+            val collection = FeatureCollection.fromFeatures(ArrayList(currentFeatures))
             val source = style.getSource("import-source") as? GeoJsonSource
             if (source != null) {
                 source.setGeoJson(collection)
@@ -1399,12 +1422,73 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 })
             }
 
-            // Bring to front
+            // Re-order layers to ensure they are on top
             listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer", "import-info-layer").forEach { id ->
                 style.getLayer(id)?.let {
                     style.removeLayer(id)
-                    style.addLayer(it)
                 }
+            }
+
+            if (style.getLayer("import-fill-layer") == null) {
+                style.addLayer(FillLayer("import-fill-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
+                        PropertyFactory.fillOutlineColor(Color.RED)
+                    )
+                })
+            }
+            if (style.getLayer("import-line-layer") == null) {
+                style.addLayer(LineLayer("import-line-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.lineColor(Color.RED),
+                        PropertyFactory.lineWidth(2f)
+                    )
+                })
+            }
+            if (style.getLayer("import-circle-layer") == null) {
+                style.addLayer(CircleLayer("import-circle-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.circleRadius(6f),
+                        PropertyFactory.circleColor(Color.RED),
+                        PropertyFactory.circleStrokeWidth(2f),
+                        PropertyFactory.circleStrokeColor(Color.WHITE)
+                    )
+                })
+            }
+            if (style.getLayer("import-label-layer") == null) {
+                style.addLayer(SymbolLayer("import-label-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.textField(org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))),
+                        PropertyFactory.textSize(14f),
+                        PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
+                        PropertyFactory.textColor(Color.BLACK),
+                        PropertyFactory.textHaloColor(Color.WHITE),
+                        PropertyFactory.textHaloWidth(2.0f),
+                        PropertyFactory.textAllowOverlap(true),
+                        PropertyFactory.textIgnorePlacement(true)
+                    )
+                })
+            }
+            if (style.getLayer("import-info-layer") == null) {
+                style.addLayer(SymbolLayer("import-info-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.iconImage("info-icon"),
+                        PropertyFactory.iconSize(0.6f),
+                        PropertyFactory.iconOffset(arrayOf(25f, -15f)),
+                        PropertyFactory.iconOpacity(
+                            org.maplibre.android.style.expressions.Expression.switchCase(
+                                org.maplibre.android.style.expressions.Expression.all(
+                                    org.maplibre.android.style.expressions.Expression.has("notes"),
+                                    org.maplibre.android.style.expressions.Expression.neq(org.maplibre.android.style.expressions.Expression.get("notes"), org.maplibre.android.style.expressions.Expression.literal(""))
+                                ),
+                                org.maplibre.android.style.expressions.Expression.literal(1f),
+                                org.maplibre.android.style.expressions.Expression.literal(0f)
+                            )
+                        ),
+                        PropertyFactory.iconAllowOverlap(true),
+                        PropertyFactory.iconIgnorePlacement(true)
+                    )
+                })
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in refreshFeatureLayer: ${e.message}")
@@ -2177,10 +2261,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             // Bring measure points to very top
-            style.removeLayer("measure-circles")
-            style.removeLayer("measure-points")
-            style.addLayer(style.getLayer("measure-circles") ?: CircleLayer("measure-circles", "measure-source"))
-            style.addLayer(measureLayer)
+            style.getLayer("measure-circles")?.let {
+                style.removeLayer("measure-circles")
+                style.addLayer(it)
+            }
+            style.getLayer("measure-points")?.let {
+                style.removeLayer("measure-points")
+                style.addLayer(it)
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "Error in addMeasurePoint: ${e.message}")
@@ -2271,6 +2359,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     override fun onGgaReceived(sentence: String) {
         if (isNtripActive) ntripManager.sendGga(sentence)
+    }
+
+    override fun onSatellitesUpdate(sats: List<SatInfo>) {
+        currentSats = sats
     }
 
     private var lastFixType = ""

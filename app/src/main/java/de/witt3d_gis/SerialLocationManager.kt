@@ -37,10 +37,12 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     private var byteBuffer = ByteArray(4096)
     private var byteBufferPos = 0
     private var isProcessing = false
+    private var lastUbxTime = 0L
 
     interface LocationListener {
         fun onLocationUpdate(location: SerialLocation)
         fun onGgaReceived(sentence: String)
+        fun onSatellitesUpdate(sats: List<SatInfo>)
         fun onError(message: String)
         fun onConnected()
         fun onDisconnected()
@@ -226,8 +228,25 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             val rtkFloat = (flags and 0x40) != 0
             val finalFix = if (rtkFixed) "RTK" else if (rtkFloat) "FRTK" else fixType
 
+            lastUbxTime = System.currentTimeMillis()
             val location = SerialLocation(lat, lon, hMSL, accuracy = acc, satellites = numSV, fixType = finalFix, speed = gSpeed)
             mainHandler.post { listener?.onLocationUpdate(location) }
+        } else if (cls == 0x01 && id == 0x35) { // NAV-SAT
+            val payload = data.sliceArray(6 until data.size - 2)
+            if (payload.size < 8) return
+            val numSvs = payload[3].toInt() and 0xFF
+            val sats = mutableListOf<SatInfo>()
+            for (i in 0 until numSvs) {
+                val off = 8 + (i * 12)
+                if (off + 12 > payload.size) break
+                val gnssId = payload[off].toInt() and 0xFF
+                val svId = payload[off + 1].toInt() and 0xFF
+                val cno = payload[off + 2].toInt() and 0xFF
+                val elev = payload[off + 3].toInt()
+                val azim = (payload[off + 4].toInt() and 0xFF) or ((payload[off + 5].toInt() and 0xFF) shl 8)
+                sats.add(SatInfo(svId, elev, azim, cno, gnssId))
+            }
+            mainHandler.post { listener?.onSatellitesUpdate(sats) }
         }
     }
 
@@ -280,8 +299,10 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 }
 
                 if (lat != null && lon != null) {
-                    val location = SerialLocation(lat, lon, alt, satellites = sats, fixType = fixType, rtkAge = age)
-                    mainHandler.post { listener?.onLocationUpdate(location) }
+                    if (System.currentTimeMillis() - lastUbxTime > 5000) { // Only use NMEA if no UBX for 5s (more conservative)
+                        val location = SerialLocation(lat, lon, alt, satellites = sats, fixType = fixType, rtkAge = age)
+                        mainHandler.post { listener?.onLocationUpdate(location) }
+                    }
                 }
             } else if (type.endsWith("RMC") && parts.size >= 9) {
                 if (parts.getOrNull(2) == "A") {
