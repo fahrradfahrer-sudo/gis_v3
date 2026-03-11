@@ -1353,7 +1353,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (!::map.isInitialized) return
         val style = map.style ?: return
         try {
-            // Clone list to avoid ConcurrentModificationException or stale state issues
             val collection = FeatureCollection.fromFeatures(ArrayList(currentFeatures))
             val source = style.getSource("import-source") as? GeoJsonSource
             if (source != null) {
@@ -1424,71 +1423,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 })
             }
 
-            // Re-order layers ONLY IF they exist, to ensure they are on top
-            // Do not remove them if they don't exist yet
-            if (style.getLayer("import-fill-layer") == null) {
-                style.addLayer(FillLayer("import-fill-layer", "import-source").apply {
-                    setProperties(
-                        PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
-                        PropertyFactory.fillOutlineColor(Color.RED)
-                    )
-                })
-            }
-            if (style.getLayer("import-line-layer") == null) {
-                style.addLayer(LineLayer("import-line-layer", "import-source").apply {
-                    setProperties(
-                        PropertyFactory.lineColor(Color.RED),
-                        PropertyFactory.lineWidth(2f)
-                    )
-                })
-            }
-            if (style.getLayer("import-circle-layer") == null) {
-                style.addLayer(CircleLayer("import-circle-layer", "import-source").apply {
-                    setProperties(
-                        PropertyFactory.circleRadius(6f),
-                        PropertyFactory.circleColor(Color.RED),
-                        PropertyFactory.circleStrokeWidth(2f),
-                        PropertyFactory.circleStrokeColor(Color.WHITE)
-                    )
-                })
-            }
-            if (style.getLayer("import-label-layer") == null) {
-                style.addLayer(SymbolLayer("import-label-layer", "import-source").apply {
-                    setProperties(
-                        PropertyFactory.textField(org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))),
-                        PropertyFactory.textSize(14f),
-                        PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
-                        PropertyFactory.textColor(Color.BLACK),
-                        PropertyFactory.textHaloColor(Color.WHITE),
-                        PropertyFactory.textHaloWidth(2.0f),
-                        PropertyFactory.textAllowOverlap(true),
-                        PropertyFactory.textIgnorePlacement(true)
-                    )
-                })
-            }
-            if (style.getLayer("import-info-layer") == null) {
-                style.addLayer(SymbolLayer("import-info-layer", "import-source").apply {
-                    setProperties(
-                        PropertyFactory.iconImage("info-icon"),
-                        PropertyFactory.iconSize(0.6f),
-                        PropertyFactory.iconOffset(arrayOf(25f, -15f)),
-                        PropertyFactory.iconOpacity(
-                            org.maplibre.android.style.expressions.Expression.switchCase(
-                                org.maplibre.android.style.expressions.Expression.all(
-                                    org.maplibre.android.style.expressions.Expression.has("notes"),
-                                    org.maplibre.android.style.expressions.Expression.neq(org.maplibre.android.style.expressions.Expression.get("notes"), org.maplibre.android.style.expressions.Expression.literal(""))
-                                ),
-                                org.maplibre.android.style.expressions.Expression.literal(1f),
-                                org.maplibre.android.style.expressions.Expression.literal(0f)
-                            )
-                        ),
-                        PropertyFactory.iconAllowOverlap(true),
-                        PropertyFactory.iconIgnorePlacement(true)
-                    )
-                })
-            }
-
-            // Always bring to front at the end
+            // Bring to front by re-adding them.
             listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer", "import-info-layer").forEach { id ->
                 style.getLayer(id)?.let { layer ->
                     style.removeLayer(id)
@@ -2245,7 +2180,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 ),
                 PropertyFactory.iconAllowOverlap(true),
                 PropertyFactory.iconIgnorePlacement(true),
-                PropertyFactory.iconSize(1.5f)
+                PropertyFactory.iconSize(0.8f)
             )
 
             // FALLBACK for visibility: CircleLayer for measurement points

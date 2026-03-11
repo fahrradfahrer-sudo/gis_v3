@@ -1,17 +1,17 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="48dp"
-    android:height="48dp"
-    android:viewportWidth="48"
-    android:viewportHeight="48">
-    <!-- Circle -->
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+    <!-- Smaller Circle -->
     <path
         android:strokeColor="#000000"
-        android:strokeWidth="1.5"
-        android:pathData="M24,24 m-15,0 a15,15 0 1,0 30,0 a15,15 0 1,0 -30,0" />
+        android:strokeWidth="1.2"
+        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
 
-    <!-- Cross lines with gap in center for transparency/visibility -->
+    <!-- Thinner Cross lines with gap in center -->
     <path
         android:strokeColor="#000000"
-        android:strokeWidth="1.5"
-        android:pathData="M24,4 L24,18 M24,30 L24,44 M4,24 L18,24 M30,24 L44,24" />
+        android:strokeWidth="1.2"
+        android:pathData="M16,2 L16,12 M16,20 L16,30 M2,16 L12,16 M20,16 L30,16" />
 </vector>

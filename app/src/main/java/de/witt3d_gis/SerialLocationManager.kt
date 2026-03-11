@@ -160,16 +160,26 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                         i = end + 1
                         continue
                     } else break // Wait for more data
-                } else if (i + 1 < byteBufferPos && byteBuffer[i] == 0xB5.toByte() && byteBuffer[i+1] == 0x62.toByte()) {
+                } else if (i + 1 < byteBufferPos && (byteBuffer[i].toInt() and 0xFF) == 0xB5 && (byteBuffer[i+1].toInt() and 0xFF) == 0x62) {
                     // Possible UBX
                     if (i + 6 <= byteBufferPos) {
                         val len = (byteBuffer[i+4].toInt() and 0xFF) or ((byteBuffer[i+5].toInt() and 0xFF) shl 8)
+                        if (len > 2048) { // Frame too large, likely corrupt sync
+                            i++
+                            continue
+                        }
                         val totalLen = len + 8
                         if (i + totalLen <= byteBufferPos) {
                             val msg = byteBuffer.copyOfRange(i, i + totalLen)
-                            sentenceQueue.offer(msg)
-                            i += totalLen
-                            continue
+                            if (verifyUbxChecksum(msg)) {
+                                sentenceQueue.offer(msg)
+                                i += totalLen
+                                continue
+                            } else {
+                                // Checksum failed
+                                i++
+                                continue
+                            }
                         } else break // Wait for full msg
                     } else break // Wait for header
                 }
@@ -197,6 +207,17 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     override fun onRunError(e: Exception) {
         sendError("Serial Error: ${e.message}")
         disconnect()
+    }
+
+    private fun verifyUbxChecksum(data: ByteArray): Boolean {
+        if (data.size < 8) return false
+        var a = 0
+        var b = 0
+        for (i in 2 until data.size - 2) {
+            a = (a + (data[i].toInt() and 0xFF)) and 0xFF
+            b = (b + a) and 0xFF
+        }
+        return (data[data.size - 2].toInt() and 0xFF) == a && (data[data.size - 1].toInt() and 0xFF) == b
     }
 
     private fun parseUbx(data: ByteArray) {
@@ -248,7 +269,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
         } else if (cls == 0x01 && id == 0x35) { // NAV-SAT
             val payload = data.sliceArray(6 until data.size - 2)
             if (payload.size < 8) return
-            val numSvs = payload[3].toInt() and 0xFF
+            val numSvs = payload[5].toInt() and 0xFF // Corrected offset for numSvs in NAV-SAT
             val sats = mutableListOf<SatInfo>()
             for (i in 0 until numSvs) {
                 val off = 8 + (i * 12)
