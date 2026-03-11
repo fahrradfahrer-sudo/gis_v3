@@ -28,12 +28,6 @@
                 android:text="@string/menu"
                 android:textSize="12sp" />
 
-            <Spinner
-                android:id="@+id/baudSpinner"
-                android:layout_width="100dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp" />
-
             <Button
                 android:id="@+id/connectSerialButton"
                 android:layout_width="wrap_content"
@@ -119,13 +113,6 @@
                 android:text="@string/meas"
                 android:textSize="12sp" />
 
-            <Button
-                android:id="@+id/settingsButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:text="@string/set"
-                android:textSize="12sp" />
         </LinearLayout>
 
         <HorizontalScrollView
@@ -308,6 +295,42 @@
             android:layout_height="match_parent"
             android:orientation="vertical"
             android:padding="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/settings"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Baud:"
+                    android:textSize="12sp" />
+                <Spinner
+                    android:id="@+id/baudSpinner"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/settingsButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="NTRIP &amp; WMS Settings"
+                android:textSize="10sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginVertical="8dp" />
 
             <TextView
                 android:layout_width="match_parent"

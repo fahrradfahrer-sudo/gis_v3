@@ -208,12 +208,26 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             val payload = data.sliceArray(6 until data.size - 2)
             if (payload.size < 84) return
 
-            val fixTypeRaw = payload[20].toInt() and 0xFF
-            val flags = payload[21].toInt() and 0xFF
-            val numSV = payload[23].toInt() and 0xFF
             val lon = readInt32(payload, 24) / 1e7
             val lat = readInt32(payload, 28) / 1e7
             val hMSL = readInt32(payload, 36) / 1000.0
+
+            // Forward for NTRIP if hardware only sends UBX
+            val time = java.text.SimpleDateFormat("HHmmss.SS", java.util.Locale.US).format(java.util.Date())
+            val latAbs = Math.abs(lat)
+            val lonAbs = Math.abs(lon)
+            val gga = "GPGGA,$time,%02d%07.4f,%s,%03d%07.4f,%s,1,08,0.9,%.2f,M,0.0,M,,".format(
+                latAbs.toInt(), (latAbs - latAbs.toInt()) * 60.0, if (lat >= 0) "N" else "S",
+                lonAbs.toInt(), (lonAbs - lonAbs.toInt()) * 60.0, if (lon >= 0) "E" else "W",
+                hMSL
+            )
+            var checksum = 0
+            gga.forEach { checksum = checksum xor it.code }
+            mainHandler.post { listener?.onGgaReceived("\$$gga*%02X".format(checksum)) }
+
+            val fixTypeRaw = payload[20].toInt() and 0xFF
+            val flags = payload[21].toInt() and 0xFF
+            val numSV = payload[23].toInt() and 0xFF
             val gSpeed = readInt32(payload, 60) / 1000.0 * 3.6 // mm/s to km/h
             val acc = readUInt32(payload, 40) / 1000.0f // hAcc in m
 
@@ -272,7 +286,9 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
             val type = parts[0]
             if (type.endsWith("GGA") && parts.size >= 10) {
-                mainHandler.post { listener?.onGgaReceived(sentence) }
+                if (System.currentTimeMillis() - lastUbxTime > 5000) {
+                    mainHandler.post { listener?.onGgaReceived(sentence) }
+                }
 
                 val latStr = parts.getOrNull(2) ?: ""
                 val latHem = parts.getOrNull(3) ?: ""

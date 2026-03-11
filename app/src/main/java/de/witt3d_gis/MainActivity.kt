@@ -200,16 +200,16 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         mapView = findViewById(R.id.mapView)
         connectSerialButton = findViewById(R.id.connectSerialButton)
         followSwitch = findViewById(R.id.followSwitch)
-        settingsButton = findViewById(R.id.settingsButton)
         drawerLayout = findViewById(R.id.drawerLayout)
         menuButton = findViewById(R.id.menuButton)
 
         val navView = findViewById<NavigationView>(R.id.navigationView)
+        settingsButton = navView.findViewById(R.id.settingsButton)
         styleRadioGroup = navView.findViewById(R.id.styleRadioGroup)
         rtkAgeText = findViewById(R.id.rtkAgeText)
         altText = findViewById(R.id.altText)
         speedText = findViewById(R.id.speedText)
-        baudSpinner = findViewById<Spinner>(R.id.baudSpinner)
+        baudSpinner = navView.findViewById<Spinner>(R.id.baudSpinner)
         crsSpinner = navView.findViewById<Spinner>(R.id.crsSpinner)
         measureButton = findViewById(R.id.measureButton)
         drawPointButton = findViewById(R.id.drawPointButton)
@@ -501,6 +501,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun refreshWmsLayers() {
+        if (!::map.isInitialized) return
         val style = map.style ?: return
 
         // First, remove all existing WMS layers/sources
@@ -1349,6 +1350,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun refreshFeatureLayer() {
+        if (!::map.isInitialized) return
         val style = map.style ?: return
         try {
             // Clone list to avoid ConcurrentModificationException or stale state issues
@@ -1422,13 +1424,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 })
             }
 
-            // Re-order layers to ensure they are on top
-            listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer", "import-info-layer").forEach { id ->
-                style.getLayer(id)?.let {
-                    style.removeLayer(id)
-                }
-            }
-
+            // Re-order layers ONLY IF they exist, to ensure they are on top
+            // Do not remove them if they don't exist yet
             if (style.getLayer("import-fill-layer") == null) {
                 style.addLayer(FillLayer("import-fill-layer", "import-source").apply {
                     setProperties(
@@ -1489,6 +1486,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         PropertyFactory.iconIgnorePlacement(true)
                     )
                 })
+            }
+
+            // Always bring to front at the end
+            listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer", "import-info-layer").forEach { id ->
+                style.getLayer(id)?.let { layer ->
+                    style.removeLayer(id)
+                    style.addLayer(layer)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in refreshFeatureLayer: ${e.message}")
@@ -1741,6 +1746,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun updateTempDrawing() {
+        if (!::map.isInitialized) return
         val style = map.style ?: return
 
         if (drawPoints.isEmpty()) {
@@ -2184,10 +2190,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         measureButton.text = if (isMeasureMode) getString(R.string.cancel) else getString(R.string.meas)
         if (!isMeasureMode) {
             measurePoints.clear()
-            map.style?.let {
-                it.removeLayer("measure-line")
-                it.removeLayer("measure-points")
-                it.removeSource("measure-source")
+            if (::map.isInitialized) {
+                map.style?.let {
+                    it.removeLayer("measure-line")
+                    it.removeLayer("measure-points")
+                    it.removeLayer("measure-circles")
+                    it.removeSource("measure-source")
+                }
             }
             updateStatus(getString(R.string.measure_mode_off))
         } else {
@@ -2197,6 +2206,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private fun addMeasurePoint(latLng: LatLng?) {
         if (latLng != null) measurePoints.add(latLng)
+        if (!::map.isInitialized) return
         val style = map.style ?: return
         try {
             val features = measurePoints.mapIndexed { i, pt ->
@@ -2261,13 +2271,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             // Bring measure points to very top
-            style.getLayer("measure-circles")?.let {
-                style.removeLayer("measure-circles")
-                style.addLayer(it)
-            }
-            style.getLayer("measure-points")?.let {
-                style.removeLayer("measure-points")
-                style.addLayer(it)
+            listOf("measure-line", "measure-circles", "measure-points").forEach { id ->
+                style.getLayer(id)?.let {
+                    style.removeLayer(id)
+                    style.addLayer(it)
+                }
             }
 
         } catch (e: Exception) {
