@@ -224,24 +224,16 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             val lat = readInt32(payload, 28) / 1e7
             val hMSL = readInt32(payload, 36) / 1000.0
 
-            // Forward for NTRIP if hardware only sends UBX
-            val time = java.text.SimpleDateFormat("HHmmss.SS", java.util.Locale.US).format(java.util.Date())
-            val latAbs = Math.abs(lat)
-            val lonAbs = Math.abs(lon)
-            val gga = "GPGGA,$time,%02d%07.4f,%s,%03d%07.4f,%s,1,08,0.9,%.2f,M,0.0,M,,".format(
-                latAbs.toInt(), (latAbs - latAbs.toInt()) * 60.0, if (lat >= 0) "N" else "S",
-                lonAbs.toInt(), (lonAbs - lonAbs.toInt()) * 60.0, if (lon >= 0) "E" else "W",
-                hMSL
-            )
-            var checksum = 0
-            gga.forEach { checksum = checksum xor it.code }
-            mainHandler.post { listener?.onGgaReceived("\$$gga*%02X".format(checksum)) }
-
+            // Determine fix type first to include in GGA
             val fixTypeRaw = payload[20].toInt() and 0xFF
             val flags = payload[21].toInt() and 0xFF
+            val flags2 = payload[22].toInt() and 0xFF // contains additional fix info
             val numSV = payload[23].toInt() and 0xFF
             val gSpeed = readInt32(payload, 60) / 1000.0 * 3.6 // mm/s to km/h
             val acc = readUInt32(payload, 40) / 1000.0f // hAcc in m
+
+            val rtkFixed = (flags and 0x80) != 0 || (flags2 and 0x02) != 0
+            val rtkFloat = (flags and 0x40) != 0 || (flags2 and 0x01) != 0
 
             val fixType = when (fixTypeRaw) {
                 2 -> "2D Fix"
@@ -249,10 +241,21 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 4 -> "GNSS+DR"
                 else -> "No Fix"
             }
-
-            val rtkFixed = (flags and 0x80) != 0
-            val rtkFloat = (flags and 0x40) != 0
             val finalFix = if (rtkFixed) "RTK" else if (rtkFloat) "FRTK" else fixType
+            val ggaQuality = if (rtkFixed) 4 else if (rtkFloat) 5 else if (fixTypeRaw >= 2) 1 else 0
+
+            // Forward for NTRIP if hardware only sends UBX
+            val time = java.text.SimpleDateFormat("HHmmss.SS", java.util.Locale.US).format(java.util.Date())
+            val latAbs = Math.abs(lat)
+            val lonAbs = Math.abs(lon)
+            val gga = "GPGGA,$time,%02d%07.4f,%s,%03d%07.4f,%s,%d,%02d,0.9,%.2f,M,0.0,M,,".format(
+                latAbs.toInt(), (latAbs - latAbs.toInt()) * 60.0, if (lat >= 0) "N" else "S",
+                lonAbs.toInt(), (lonAbs - lonAbs.toInt()) * 60.0, if (lon >= 0) "E" else "W",
+                ggaQuality, numSV, hMSL
+            )
+            var checksum = 0
+            gga.forEach { checksum = checksum xor it.code }
+            mainHandler.post { listener?.onGgaReceived("\$$gga*%02X".format(checksum)) }
 
             lastUbxTime = System.currentTimeMillis()
             val location = SerialLocation(lat, lon, hMSL, accuracy = acc, satellites = numSV, fixType = finalFix, speed = gSpeed)
@@ -297,7 +300,62 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             if (parts.isEmpty()) return
 
             val type = parts[0]
-            if (type.endsWith("GGA") && parts.size >= 10) {
+            if (type == "\$PUBX" && parts.size >= 3) {
+                lastUbxTime = System.currentTimeMillis()
+                val subtype = parts[1]
+                if (subtype == "00" && parts.size >= 20) { // PUBX 00
+                    val latRaw = parts[3]
+                    val latHem = parts[4]
+                    val lonRaw = parts[5]
+                    val lonHem = parts[6]
+                    val alt = parts[7].toDoubleOrNull()
+                    val navStat = parts[8]
+                    val hAcc = parts[9].toDoubleOrNull()
+                    val vAcc = parts[10].toDoubleOrNull()
+                    val speed = parts[11].toDoubleOrNull()
+                    val numSvs = parts[18].toIntOrNull()
+
+                    val lat = parseLatitude(latRaw, latHem)
+                    val lon = parseLongitude(lonRaw, lonHem)
+
+                    val fixType = when(navStat) {
+                        "G3" -> "3D Fix"
+                        "G2" -> "2D Fix"
+                        "NF" -> "No Fix"
+                        "DR" -> "DR"
+                        "RK" -> "RTK"
+                        else -> navStat
+                    }
+
+                    if (lat != null && lon != null) {
+                        val location = SerialLocation(lat, lon, alt, satellites = numSvs, fixType = fixType, accuracy = hAcc?.toFloat(), speed = speed)
+                        mainHandler.post { listener?.onLocationUpdate(location) }
+                    }
+                } else if (subtype == "03" && parts.size >= 3) { // PUBX 03
+                    val numSvs = parts[2].toIntOrNull() ?: 0
+                    val sats = mutableListOf<SatInfo>()
+                    for (i in 0 until numSvs) {
+                        val off = 3 + (i * 6)
+                        if (off + 6 > parts.size) break
+                        val svId = parts[off].toIntOrNull() ?: 0
+                        val stat = parts[off+1] // U: used, e: enabled...
+                        val azim = parts[off+2].toIntOrNull() ?: 0
+                        val elev = parts[off+3].toIntOrNull() ?: 0
+                        val cno = parts[off+4].toIntOrNull() ?: 0
+
+                        // For PUBX 03 we don't have gnssId directly, guess by svId
+                        val gnssId = when {
+                            svId in 1..32 -> 0 // GPS
+                            svId in 120..158 -> 1 // SBAS
+                            svId in 193..197 -> 5 // QZSS
+                            svId in 211..246 -> 2 // Galileo
+                            else -> 0
+                        }
+                        sats.add(SatInfo(svId, elev, azim, cno, gnssId))
+                    }
+                    mainHandler.post { listener?.onSatellitesUpdate(sats) }
+                }
+            } else if (type.endsWith("GGA") && parts.size >= 10) {
                 if (System.currentTimeMillis() - lastUbxTime > 5000) {
                     mainHandler.post { listener?.onGgaReceived(sentence) }
                 }

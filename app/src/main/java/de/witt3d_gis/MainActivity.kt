@@ -1423,11 +1423,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 })
             }
 
-            // Correct re-ordering logic: Instead of removal, move to the top
-            // MapLibre doesn't have a direct 'moveToTop', so we re-add if we want it on top of new layers.
-            // But usually, standard base styles put things in a specific order.
-            // If we just want them always visible, ensuring they aren't removed/re-added constantly helps.
-            // If they disappear, it's often because the style was set or base map changed.
+            // Ensure layers are on top
+            listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer", "import-info-layer").forEach { id ->
+                style.getLayer(id)?.let { layer ->
+                    style.removeLayer(layer)
+                    style.addLayer(layer)
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error in refreshFeatureLayer: ${e.message}")
         }
@@ -2205,9 +2207,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             // Bring measure points to very top
             listOf("measure-line", "measure-circles", "measure-points").forEach { id ->
-                style.getLayer(id)?.let {
+                style.getLayer(id)?.let { layer ->
                     style.removeLayer(id)
-                    style.addLayer(it)
+                    style.addLayer(layer)
                 }
             }
 

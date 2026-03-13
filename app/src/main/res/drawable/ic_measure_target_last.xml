@@ -3,23 +3,14 @@
     android:height="32dp"
     android:viewportWidth="32"
     android:viewportHeight="32">
-    <!-- White outline for visibility -->
+    <!-- Halo -->
     <path
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="4.0"
-        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
-    <path
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="4.0"
-        android:pathData="M16,2 L16,10 M16,22 L16,30 M2,16 L10,16 M22,16 L30,16" />
-
-    <!-- Red target sight for the last point -->
+        android:strokeWidth="2.5"
+        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0 M16,2 L16,30 M2,16 L30,16" />
+    <!-- Crosshair -->
     <path
         android:strokeColor="#FF0000"
         android:strokeWidth="2.0"
-        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
-    <path
-        android:strokeColor="#FF0000"
-        android:strokeWidth="2.0"
-        android:pathData="M16,2 L16,10 M16,22 L16,30 M2,16 L10,16 M22,16 L30,16" />
+        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0 M16,2 L16,30 M2,16 L30,16" />
 </vector>

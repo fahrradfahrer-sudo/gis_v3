@@ -25,7 +25,7 @@
     <string name="import_data">Daten Importieren</string>
     <string name="import_csv">CSV Importieren</string>
     <string name="import_gis_file">GIS Datei Importieren (.shp/.json/.qgz/.kml)</string>
-    <string name="export_data">Daten Exportieren (GeoJSON)</string>
+    <string name="export_data">Daten Exportieren</string>
     <string name="display_settings">Anzeige-Einstellungen</string>
     <string name="relative_scale">Relativer Maßstab (1:X)</string>
     <string name="name">Name</string>
