@@ -320,9 +320,9 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                     val lat = parseLatitude(latRaw, latHem)
                     val lon = parseLongitude(lonRaw, lonHem)
 
-                    val fixType = when(navStat.trim()) {
-                        "G3" -> "3D Fix"
-                        "G2" -> "2D Fix"
+                    val fixType = when(navStat.trim().uppercase()) {
+                        "G3" -> "Single"
+                        "G2" -> "Single"
                         "D3" -> "DGPS"
                         "D2" -> "DGPS"
                         "NF" -> "No Fix"

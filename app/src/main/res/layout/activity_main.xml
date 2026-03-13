@@ -248,6 +248,20 @@
                 android:shadowDy="1" />
         </FrameLayout>
 
+        <TextView
+            android:id="@+id/coordsText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            android:layout_marginBottom="4dp"
+            android:background="#80FFFFFF"
+            android:padding="2dp"
+            android:text="0.000000, 0.000000"
+            android:textColor="@android:color/black"
+            android:textSize="10sp"
+            app:layout_constraintBottom_toBottomOf="@id/mapView"
+            app:layout_constraintEnd_toEndOf="parent" />
+
         <LinearLayout
             android:id="@+id/zoomControls"
             android:layout_width="wrap_content"
@@ -255,7 +269,7 @@
             android:orientation="vertical"
             android:layout_marginEnd="16dp"
             android:layout_marginBottom="16dp"
-            app:layout_constraintBottom_toTopOf="@id/statusContainer"
+            app:layout_constraintBottom_toTopOf="@id/coordsText"
             app:layout_constraintEnd_toEndOf="parent">
 
             <Button

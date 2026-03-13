@@ -109,6 +109,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var distanceArrowText: TextView
     private lateinit var arrowIcon: View
     private lateinit var scaleBar: ScaleBarView
+    private lateinit var coordsText: TextView
     private lateinit var crsSpinner: Spinner
     private lateinit var wmsLayerContainer: LinearLayout
     private lateinit var addWmsButton: Button
@@ -223,6 +224,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         distanceArrowText = findViewById(R.id.distanceArrowText)
         arrowIcon = findViewById(R.id.arrowIcon)
         scaleBar = findViewById(R.id.scaleBar)
+        coordsText = findViewById(R.id.coordsText)
         wmsLayerContainer = navView.findViewById(R.id.wmsLayerContainer)
         addWmsButton = navView.findViewById(R.id.addWmsButton)
 
@@ -1366,6 +1368,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
                         PropertyFactory.fillOutlineColor(Color.RED)
                     )
+                    minZoom = 0f
+                    maxZoom = 40f
                 })
             }
             if (style.getLayer("import-line-layer") == null) {
@@ -1374,6 +1378,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         PropertyFactory.lineColor(Color.RED),
                         PropertyFactory.lineWidth(2f)
                     )
+                    minZoom = 0f
+                    maxZoom = 40f
                 })
             }
             if (style.getLayer("import-circle-layer") == null) {
@@ -1384,6 +1390,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         PropertyFactory.circleStrokeWidth(2f),
                         PropertyFactory.circleStrokeColor(Color.WHITE)
                     )
+                    minZoom = 0f
+                    maxZoom = 40f
                 })
             }
             if (style.getLayer("import-label-layer") == null) {
@@ -1398,6 +1406,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         PropertyFactory.textAllowOverlap(true),
                         PropertyFactory.textIgnorePlacement(true)
                     )
+                    minZoom = 0f
+                    maxZoom = 40f
                 })
             }
             // Ensure layers are on top
@@ -2338,6 +2348,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             lastLocation = LatLng(location.latitude, location.longitude)
+            coordsText.text = "%.7f, %.7f".format(location.latitude, location.longitude)
             if (isMeasureMode) calculateMeasureResult()
 
             val androidLocation = Location("gps").apply {
