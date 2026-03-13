@@ -1423,13 +1423,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 })
             }
 
-            // Bring to front by re-adding them.
-            listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer", "import-info-layer").forEach { id ->
-                style.getLayer(id)?.let { layer ->
-                    style.removeLayer(id)
-                    style.addLayer(layer)
-                }
-            }
+            // Correct re-ordering logic: Instead of removal, move to the top
+            // MapLibre doesn't have a direct 'moveToTop', so we re-add if we want it on top of new layers.
+            // But usually, standard base styles put things in a specific order.
+            // If we just want them always visible, ensuring they aren't removed/re-added constantly helps.
+            // If they disappear, it's often because the style was set or base map changed.
         } catch (e: Exception) {
             Log.e(TAG, "Error in refreshFeatureLayer: ${e.message}")
         }

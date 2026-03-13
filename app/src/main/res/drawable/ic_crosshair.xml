@@ -6,12 +6,12 @@
     <!-- Smaller Circle -->
     <path
         android:strokeColor="#000000"
-        android:strokeWidth="1.2"
-        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
+        android:strokeWidth="1.0"
+        android:pathData="M16,16 m-8,0 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0" />
 
     <!-- Thinner Cross lines with gap in center -->
     <path
         android:strokeColor="#000000"
-        android:strokeWidth="1.2"
-        android:pathData="M16,2 L16,12 M16,20 L16,30 M2,16 L12,16 M20,16 L30,16" />
+        android:strokeWidth="1.0"
+        android:pathData="M16,4 L16,12 M16,20 L16,28 M4,16 L12,16 M20,16 L28,16" />
 </vector>

@@ -139,11 +139,10 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     override fun onNewData(data: ByteArray) {
         synchronized(byteBuffer) {
             if (byteBufferPos + data.size > byteBuffer.size) {
-                // Grow or reset
                 if (byteBuffer.size < 65536) {
                     byteBuffer = byteBuffer.copyOf(byteBuffer.size * 2)
                 } else {
-                    byteBufferPos = 0 // Emergency reset
+                    byteBufferPos = 0
                 }
             }
             System.arraycopy(data, 0, byteBuffer, byteBufferPos, data.size)
@@ -151,37 +150,31 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
             var i = 0
             while (i < byteBufferPos) {
-                if (byteBuffer[i] == '$'.toByte()) {
-                    // Possible NMEA
+                val b = byteBuffer[i].toInt() and 0xFF
+                if (b == 0x24) { // '$'
                     val end = findNewline(i)
                     if (end != -1) {
                         val sentence = String(byteBuffer, i, end - i, Charsets.US_ASCII).trim()
-                        sentenceQueue.offer(sentence)
+                        if (sentence.isNotEmpty()) sentenceQueue.offer(sentence)
                         i = end + 1
                         continue
-                    } else break // Wait for more data
-                } else if (i + 1 < byteBufferPos && (byteBuffer[i].toInt() and 0xFF) == 0xB5 && (byteBuffer[i+1].toInt() and 0xFF) == 0x62) {
-                    // Possible UBX
-                    if (i + 6 <= byteBufferPos) {
-                        val len = (byteBuffer[i+4].toInt() and 0xFF) or ((byteBuffer[i+5].toInt() and 0xFF) shl 8)
-                        if (len > 2048) { // Frame too large, likely corrupt sync
-                            i++
-                            continue
-                        }
-                        val totalLen = len + 8
-                        if (i + totalLen <= byteBufferPos) {
-                            val msg = byteBuffer.copyOfRange(i, i + totalLen)
-                            if (verifyUbxChecksum(msg)) {
-                                sentenceQueue.offer(msg)
-                                i += totalLen
-                                continue
-                            } else {
-                                // Checksum failed
-                                i++
-                                continue
-                            }
-                        } else break // Wait for full msg
-                    } else break // Wait for header
+                    } else break
+                } else if (b == 0xB5) { // UBX Sync 1
+                    if (i + 1 < byteBufferPos && (byteBuffer[i+1].toInt() and 0xFF) == 0x62) {
+                        if (i + 6 <= byteBufferPos) {
+                            val len = (byteBuffer[i+4].toInt() and 0xFF) or ((byteBuffer[i+5].toInt() and 0xFF) shl 8)
+                            val totalLen = len + 8
+                            if (totalLen > 2048) { i++; continue } // Protection
+                            if (i + totalLen <= byteBufferPos) {
+                                val msg = byteBuffer.copyOfRange(i, i + totalLen)
+                                if (verifyUbxChecksum(msg)) {
+                                    sentenceQueue.offer(msg)
+                                    i += totalLen
+                                    continue
+                                }
+                            } else break
+                        } else break
+                    }
                 }
                 i++
             }
@@ -190,9 +183,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 if (i < byteBufferPos) {
                     System.arraycopy(byteBuffer, i, byteBuffer, 0, byteBufferPos - i)
                     byteBufferPos -= i
-                } else {
-                    byteBufferPos = 0
-                }
+                } else { byteBufferPos = 0 }
             }
         }
     }
