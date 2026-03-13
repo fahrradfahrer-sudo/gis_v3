@@ -30,7 +30,6 @@
     <string name="relative_scale">Relative Scale (1:X)</string>
     <string name="name">Name</string>
     <string name="notes">Notes</string>
-    <string name="status_edit">Edit: Tap a feature to edit notes or delete</string>
     <string name="save">Save</string>
     <string name="cancel">Cancel</string>
     <string name="delete">Delete</string>
