@@ -25,11 +25,11 @@
     <string name="import_data">Import Data</string>
     <string name="import_csv">Import CSV</string>
     <string name="import_gis_file">Import GIS File (.shp/.json/.qgz/.kml)</string>
-    <string name="export_data">Export Data (GeoJSON)</string>
+    <string name="export_data">Export Data</string>
     <string name="display_settings">Display Settings</string>
     <string name="relative_scale">Relative Scale (1:X)</string>
     <string name="name">Name</string>
-    <string name="notes">Notes</string>
+    <string name="status_edit">Edit: Tap a feature to edit or delete</string>
     <string name="save">Save</string>
     <string name="cancel">Cancel</string>
     <string name="delete">Delete</string>
@@ -61,7 +61,6 @@
     <string name="status_drawing_pt">Drawing Point: Tap on map</string>
     <string name="status_drawing_line">Drawing Line: Tap points, tap \'Draw Line\' again to finish</string>
     <string name="status_drawing_poly">Drawing Poly: Tap points, tap \'Draw Poly\' again to finish</string>
-    <string name="status_edit">Edit: Tap a feature to edit notes or delete</string>
     <string name="status_drawing_off">Drawing Mode Off</string>
     <string name="serial_connected">Serial Connected</string>
     <string name="disconnected">Disconnected</string>

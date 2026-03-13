@@ -38,6 +38,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     private var byteBufferPos = 0
     private var isProcessing = false
     private var lastUbxTime = 0L
+    private var lastRtkAge: Double? = null
 
     interface LocationListener {
         fun onLocationUpdate(location: SerialLocation)
@@ -258,7 +259,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             mainHandler.post { listener?.onGgaReceived("\$$gga*%02X".format(checksum)) }
 
             lastUbxTime = System.currentTimeMillis()
-            val location = SerialLocation(lat, lon, hMSL, accuracy = acc, satellites = numSV, fixType = finalFix, speed = gSpeed)
+            val location = SerialLocation(lat, lon, hMSL, accuracy = acc, satellites = numSV, fixType = finalFix, speed = gSpeed, rtkAge = lastRtkAge)
             mainHandler.post { listener?.onLocationUpdate(location) }
         } else if (cls == 0x01 && id == 0x35) { // NAV-SAT
             val payload = data.sliceArray(6 until data.size - 2)
@@ -313,22 +314,31 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                     val hAcc = parts[9].toDoubleOrNull()
                     val vAcc = parts[10].toDoubleOrNull()
                     val speed = parts[11].toDoubleOrNull()
+                    val diffAge = parts[14].toDoubleOrNull()
                     val numSvs = parts[18].toIntOrNull()
 
                     val lat = parseLatitude(latRaw, latHem)
                     val lon = parseLongitude(lonRaw, lonHem)
 
-                    val fixType = when(navStat) {
+                    val fixType = when(navStat.trim()) {
                         "G3" -> "3D Fix"
                         "G2" -> "2D Fix"
+                        "D3" -> "DGPS"
+                        "D2" -> "DGPS"
                         "NF" -> "No Fix"
                         "DR" -> "DR"
                         "RK" -> "RTK"
-                        else -> navStat
+                        "FR" -> "FRTK"
+                        else -> navStat.trim()
+                    }
+
+                    if (diffAge != null) {
+                        lastRtkAge = diffAge
+                        lastUbxTime = System.currentTimeMillis() // Keep UBX priority if we have fresh corrections
                     }
 
                     if (lat != null && lon != null) {
-                        val location = SerialLocation(lat, lon, alt, satellites = numSvs, fixType = fixType, accuracy = hAcc?.toFloat(), speed = speed)
+                        val location = SerialLocation(lat, lon, alt, satellites = numSvs, fixType = fixType, accuracy = hAcc?.toFloat(), speed = speed, rtkAge = lastRtkAge)
                         mainHandler.post { listener?.onLocationUpdate(location) }
                     }
                 } else if (subtype == "03" && parts.size >= 3) { // PUBX 03
@@ -356,9 +366,8 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                     mainHandler.post { listener?.onSatellitesUpdate(sats) }
                 }
             } else if (type.endsWith("GGA") && parts.size >= 10) {
-                if (System.currentTimeMillis() - lastUbxTime > 5000) {
-                    mainHandler.post { listener?.onGgaReceived(sentence) }
-                }
+                // Always forward GGA for NTRIP support
+                mainHandler.post { listener?.onGgaReceived(sentence) }
 
                 val latStr = parts.getOrNull(2) ?: ""
                 val latHem = parts.getOrNull(3) ?: ""
@@ -376,6 +385,8 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 val alt = altStr.toDoubleOrNull()
                 val age = ageStr.toDoubleOrNull()
 
+                if (age != null) lastRtkAge = age
+
                 val fixType = when(quality) {
                     1 -> "Single"
                     2 -> "DGPS"
@@ -385,8 +396,8 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 }
 
                 if (lat != null && lon != null) {
-                    if (System.currentTimeMillis() - lastUbxTime > 5000) { // Only use NMEA if no UBX for 5s (more conservative)
-                        val location = SerialLocation(lat, lon, alt, satellites = sats, fixType = fixType, rtkAge = age)
+                    if (System.currentTimeMillis() - lastUbxTime > 5000) { // Only use NMEA if no UBX for 5s
+                        val location = SerialLocation(lat, lon, alt, satellites = sats, fixType = fixType, rtkAge = lastRtkAge)
                         mainHandler.post { listener?.onLocationUpdate(location) }
                     }
                 }

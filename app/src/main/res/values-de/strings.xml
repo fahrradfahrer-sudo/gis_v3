@@ -29,7 +29,6 @@
     <string name="display_settings">Anzeige-Einstellungen</string>
     <string name="relative_scale">Relativer Maßstab (1:X)</string>
     <string name="name">Name</string>
-    <string name="notes">Notizen</string>
     <string name="save">Speichern</string>
     <string name="cancel">Abbrechen</string>
     <string name="delete">Entfernen</string>
@@ -61,7 +60,7 @@
     <string name="status_drawing_pt">Punkt zeichnen: Auf Karte tippen</string>
     <string name="status_drawing_line">Linie zeichnen: Punkte tippen, erneut \'Linie\' tippen zum Beenden</string>
     <string name="status_drawing_poly">Poly zeichnen: Punkte tippen, erneut \'Poly\' tippen zum Beenden</string>
-    <string name="status_edit">Bearbeiten: Objekt tippen um Notizen zu ändern oder zu löschen</string>
+    <string name="status_edit">Bearbeiten: Objekt tippen um zu bearbeiten oder zu löschen</string>
     <string name="status_drawing_off">Zeichenmodus Aus</string>
     <string name="serial_connected">Seriell verbunden</string>
     <string name="disconnected">Getrennt</string>
