@@ -195,6 +195,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         MapLibre.getInstance(this)
         setContentView(R.layout.activity_main)
 
+
+
         statusText = findViewById(R.id.statusText)
         fixStatusText = findViewById(R.id.fixStatusText)
         satCountText = findViewById(R.id.satCountText)
@@ -490,9 +492,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             style.addImage("measure-target", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!))
             style.addImage("measure-target-last", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_measure_target_last)!!))
             style.addImage("info-icon", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_info)!!))
-            enableLocationComponent(style)
+
             refreshWmsLayers()
             refreshFeatureLayer()
+            enableLocationComponent(style)
+
             if (isMeasureMode) {
                 // Re-add measure points if they exist
                 addMeasurePoint(null)
@@ -594,8 +598,20 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
                 map.locationComponent.activateLocationComponent(options)
                 map.locationComponent.isLocationComponentEnabled = true
-                map.locationComponent.cameraMode = CameraMode.TRACKING
-                map.locationComponent.renderMode = RenderMode.COMPASS
+                map.locationComponent.renderMode = RenderMode.NORMAL
+                map.locationComponent.cameraMode = CameraMode.NONE
+
+                // Ensure marker is visible
+                map.locationComponent.onStart()
+                lastLocation?.let { ll ->
+                    val mock = Location("gps").apply {
+                        latitude = ll.latitude
+                        longitude = ll.longitude
+                        time = System.currentTimeMillis()
+                        accuracy = 1.0f
+                    }
+                    map.locationComponent.forceLocationUpdate(mock)
+                }
             } catch (e: Exception) { Log.e(TAG, "LocComp error: ${e.message}") }
         }
     }
@@ -1356,30 +1372,38 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         try {
             val collection = FeatureCollection.fromFeatures(ArrayList(currentFeatures))
             val source = style.getSource("import-source") as? GeoJsonSource
+
             if (source != null) {
                 source.setGeoJson(collection)
             } else {
-                style.addSource(GeoJsonSource("import-source", collection))
+                val options = org.maplibre.android.style.sources.GeoJsonOptions()
+                    .withBuffer(512)
+                    .withTolerance(0f)
+                    .withMaxZoom(28)
+                style.addSource(GeoJsonSource("import-source", collection, options))
             }
 
             if (style.getLayer("import-fill-layer") == null) {
                 style.addLayer(FillLayer("import-fill-layer", "import-source").apply {
                     setProperties(
                         PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
-                        PropertyFactory.fillOutlineColor(Color.RED)
+                        PropertyFactory.fillOutlineColor(Color.RED),
+                        PropertyFactory.fillAntialias(true)
                     )
                     minZoom = 0f
-                    maxZoom = 40f
+                    maxZoom = 45f
                 })
             }
             if (style.getLayer("import-line-layer") == null) {
                 style.addLayer(LineLayer("import-line-layer", "import-source").apply {
                     setProperties(
                         PropertyFactory.lineColor(Color.RED),
-                        PropertyFactory.lineWidth(2f)
+                        PropertyFactory.lineWidth(2f),
+                        PropertyFactory.lineCap(org.maplibre.android.style.layers.Property.LINE_CAP_ROUND),
+                        PropertyFactory.lineJoin(org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND)
                     )
                     minZoom = 0f
-                    maxZoom = 40f
+                    maxZoom = 45f
                 })
             }
             if (style.getLayer("import-circle-layer") == null) {
@@ -1391,7 +1415,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         PropertyFactory.circleStrokeColor(Color.WHITE)
                     )
                     minZoom = 0f
-                    maxZoom = 40f
+                    maxZoom = 45f
                 })
             }
             if (style.getLayer("import-label-layer") == null) {
@@ -1407,16 +1431,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         PropertyFactory.textIgnorePlacement(true)
                     )
                     minZoom = 0f
-                    maxZoom = 40f
+                    maxZoom = 45f
                 })
             }
-            // Ensure layers are on top
-            listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer").forEach { id ->
-                style.getLayer(id)?.let { layer ->
-                    style.removeLayer(layer)
-                    style.addLayer(layer)
-                }
-            }
+
+            // Ensure layers are correctly ordered and visible
+            style.getLayer("import-fill-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
+            style.getLayer("import-line-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
+            style.getLayer("import-circle-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
+            style.getLayer("import-label-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
         } catch (e: Exception) {
             Log.e(TAG, "Error in refreshFeatureLayer: ${e.message}")
         }
@@ -1684,7 +1707,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (source != null) {
             source.setGeoJson(collection)
         } else {
-            style.addSource(GeoJsonSource("temp-draw-source", collection))
+            val options = org.maplibre.android.style.sources.GeoJsonOptions().withBuffer(512).withTolerance(0f).withMaxZoom(28)
+            style.addSource(GeoJsonSource("temp-draw-source", collection, options))
         }
 
         if (style.getLayer("temp-draw-layer") == null) {
@@ -2131,7 +2155,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             if (source != null) {
                 source.setGeoJson(collection)
             } else {
-                style.addSource(GeoJsonSource("measure-source", collection))
+                val options = org.maplibre.android.style.sources.GeoJsonOptions().withBuffer(512).withTolerance(0f).withMaxZoom(28)
+                style.addSource(GeoJsonSource("measure-source", collection, options))
             }
 
             if (style.getLayer("measure-points") == null) {
@@ -2179,12 +2204,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             // Bring measure points to very top
-            listOf("measure-line", "measure-circles", "measure-points").forEach { id ->
-                style.getLayer(id)?.let { layer ->
-                    style.removeLayer(id)
-                    style.addLayer(layer)
-                }
-            }
+            style.getLayer("measure-line")?.let { l -> style.removeLayer(l); style.addLayer(l) }
+            style.getLayer("measure-circles")?.let { l -> style.removeLayer(l); style.addLayer(l) }
+            style.getLayer("measure-points")?.let { l -> style.removeLayer(l); style.addLayer(l) }
 
         } catch (e: Exception) {
             Log.e(TAG, "Error in addMeasurePoint: ${e.message}")

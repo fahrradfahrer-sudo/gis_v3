@@ -169,6 +169,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                             if (i + totalLen <= byteBufferPos) {
                                 val msg = byteBuffer.copyOfRange(i, i + totalLen)
                                 if (verifyUbxChecksum(msg)) {
+                                    lastUbxTime = System.currentTimeMillis() // Priority timer
                                     sentenceQueue.offer(msg)
                                     i += totalLen
                                     continue
@@ -229,20 +230,29 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             val fixTypeRaw = payload[20].toInt() and 0xFF
             val flags = payload[21].toInt() and 0xFF
             val flags2 = payload[22].toInt() and 0xFF // contains additional fix info
+            val flags3 = if (payload.size > 22) payload[22].toInt() and 0xFF else 0 // Actually byte 22 is flags2
             val numSV = payload[23].toInt() and 0xFF
             val gSpeed = readInt32(payload, 60) / 1000.0 * 3.6 // mm/s to km/h
             val acc = readUInt32(payload, 40) / 1000.0f // hAcc in m
 
-            val rtkFixed = (flags and 0x80) != 0 || (flags2 and 0x02) != 0
-            val rtkFloat = (flags and 0x40) != 0 || (flags2 and 0x01) != 0
+            // Improved RTK check using carrSoln field (flags bit 6-7)
+            // Some newer devices use flags2 or flags3 for RTK status too, but NAV-PVT carrSoln is standard.
+            val carrSoln = (flags shr 6) and 0x03
+            val rtkFixed = (carrSoln == 2)
+            val rtkFloat = (carrSoln == 1)
 
             val fixType = when (fixTypeRaw) {
-                2 -> "2D Fix"
-                3 -> "3D Fix"
+                2 -> "Single"
+                3 -> "Single"
                 4 -> "GNSS+DR"
                 else -> "No Fix"
             }
-            val finalFix = if (rtkFixed) "RTK" else if (rtkFloat) "FRTK" else fixType
+            // Prioritize RTK status from carrSoln
+            val finalFix = when {
+                rtkFixed -> "RTK"
+                rtkFloat -> "FRTK"
+                else -> fixType
+            }
             val ggaQuality = if (rtkFixed) 4 else if (rtkFloat) 5 else if (fixTypeRaw >= 2) 1 else 0
 
             // Forward for NTRIP if hardware only sends UBX
@@ -302,44 +312,47 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
 
             val type = parts[0]
             if (type == "\$PUBX" && parts.size >= 3) {
-                lastUbxTime = System.currentTimeMillis()
                 val subtype = parts[1]
                 if (subtype == "00" && parts.size >= 20) { // PUBX 00
-                    val latRaw = parts[3]
-                    val latHem = parts[4]
-                    val lonRaw = parts[5]
-                    val lonHem = parts[6]
-                    val alt = parts[7].toDoubleOrNull()
-                    val navStat = parts[8]
-                    val hAcc = parts[9].toDoubleOrNull()
-                    val vAcc = parts[10].toDoubleOrNull()
-                    val speed = parts[11].toDoubleOrNull()
-                    val diffAge = parts[14].toDoubleOrNull()
-                    val numSvs = parts[18].toIntOrNull()
+                    // Forward GGA for NTRIP always
+                    // but location update is suppressed if high-precision binary is active
+                    if (System.currentTimeMillis() - lastUbxTime > 5000) {
+                        val latRaw = parts[3]
+                        val latHem = parts[4]
+                        val lonRaw = parts[5]
+                        val lonHem = parts[6]
+                        val alt = parts[7].toDoubleOrNull()
+                        val navStat = parts[8]
+                        val hAcc = parts[9].toDoubleOrNull()
+                        val vAcc = parts[10].toDoubleOrNull()
+                        val speed = parts[11].toDoubleOrNull()
+                        val diffAge = parts[14].toDoubleOrNull()
+                        val numSvs = parts[18].toIntOrNull()
 
-                    val lat = parseLatitude(latRaw, latHem)
-                    val lon = parseLongitude(lonRaw, lonHem)
+                        val lat = parseLatitude(latRaw, latHem)
+                        val lon = parseLongitude(lonRaw, lonHem)
 
-                    val fixType = when(navStat.trim().uppercase()) {
-                        "G3" -> "Single"
-                        "G2" -> "Single"
-                        "D3" -> "DGPS"
-                        "D2" -> "DGPS"
-                        "NF" -> "No Fix"
-                        "DR" -> "DR"
-                        "RK" -> "RTK"
-                        "FR" -> "FRTK"
-                        else -> navStat.trim()
-                    }
+                        val navStatTrimmed = navStat.trim().uppercase()
+                        val fixType = when (navStatTrimmed) {
+                            "G3" -> "Single"
+                            "G2" -> "Single"
+                            "D3" -> "DGPS"
+                            "D2" -> "DGPS"
+                            "NF" -> "No Fix"
+                            "DR" -> "DR"
+                            "RK" -> "RTK"
+                            "FR" -> "FRTK"
+                        "RTK" -> "RTK"
+                        "FLOAT" -> "FRTK"
+                            else -> navStatTrimmed
+                        }
 
-                    if (diffAge != null) {
-                        lastRtkAge = diffAge
-                        lastUbxTime = System.currentTimeMillis() // Keep UBX priority if we have fresh corrections
-                    }
+                        if (diffAge != null) lastRtkAge = diffAge
 
-                    if (lat != null && lon != null) {
-                        val location = SerialLocation(lat, lon, alt, satellites = numSvs, fixType = fixType, accuracy = hAcc?.toFloat(), speed = speed, rtkAge = lastRtkAge)
-                        mainHandler.post { listener?.onLocationUpdate(location) }
+                        if (lat != null && lon != null) {
+                            val location = SerialLocation(lat, lon, alt, satellites = numSvs, fixType = fixType, accuracy = hAcc?.toFloat(), speed = speed, rtkAge = lastRtkAge)
+                            mainHandler.post { listener?.onLocationUpdate(location) }
+                        }
                     }
                 } else if (subtype == "03" && parts.size >= 3) { // PUBX 03
                     val numSvs = parts[2].toIntOrNull() ?: 0
