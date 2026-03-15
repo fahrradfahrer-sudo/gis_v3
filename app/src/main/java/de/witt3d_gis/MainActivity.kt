@@ -255,7 +255,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
 
         crosshairSwitch.setOnCheckedChangeListener { _, isChecked ->
-            if (::map.isInitialized) {
+            if (::map.isInitialized && map.locationComponent.isLocationComponentActivated) {
                 map.locationComponent.isLocationComponentEnabled = isChecked
             }
         }
