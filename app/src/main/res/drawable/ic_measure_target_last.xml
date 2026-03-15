@@ -3,14 +3,14 @@
     android:height="32dp"
     android:viewportWidth="32"
     android:viewportHeight="32">
-    <!-- Halo -->
+    <!-- Halo for contrast -->
     <path
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="2.5"
-        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0 M16,2 L16,30 M2,16 L30,16" />
-    <!-- Crosshair -->
+        android:strokeWidth="3.0"
+        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0 M16,4 L16,10 M16,22 L16,28 M4,16 L10,16 M22,16 L28,16" />
+    <!-- Red target crosshair with empty center (for last point) -->
     <path
         android:strokeColor="#FF0000"
-        android:strokeWidth="2.0"
-        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0 M16,2 L16,30 M2,16 L30,16" />
+        android:strokeWidth="1.5"
+        android:pathData="M16,16 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0 M16,4 L16,10 M16,22 L16,28 M4,16 L10,16 M22,16 L28,16" />
 </vector>

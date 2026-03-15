@@ -445,6 +445,22 @@
                 android:text="@string/relative_scale"
                 android:textSize="10sp" />
 
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/crosshairSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/show_gnss_crosshair"
+                android:checked="true"
+                android:textSize="10sp" />
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/manualDataSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/show_manual_geometries"
+                android:checked="true"
+                android:textSize="10sp" />
+
             <Spinner
                 android:id="@+id/crsSpinner"
                 android:layout_width="match_parent"

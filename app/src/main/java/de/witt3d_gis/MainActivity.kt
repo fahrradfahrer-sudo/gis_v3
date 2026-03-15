@@ -110,6 +110,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var arrowIcon: View
     private lateinit var scaleBar: ScaleBarView
     private lateinit var coordsText: TextView
+    private lateinit var crosshairSwitch: SwitchCompat
+    private lateinit var manualDataSwitch: SwitchCompat
     private lateinit var crsSpinner: Spinner
     private lateinit var wmsLayerContainer: LinearLayout
     private lateinit var addWmsButton: Button
@@ -227,6 +229,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         arrowIcon = findViewById(R.id.arrowIcon)
         scaleBar = findViewById(R.id.scaleBar)
         coordsText = findViewById(R.id.coordsText)
+        crosshairSwitch = navView.findViewById(R.id.crosshairSwitch)
+        manualDataSwitch = navView.findViewById(R.id.manualDataSwitch)
         wmsLayerContainer = navView.findViewById(R.id.wmsLayerContainer)
         addWmsButton = navView.findViewById(R.id.addWmsButton)
 
@@ -250,6 +254,16 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
         navView.findViewById<SwitchCompat>(R.id.scaleModeSwitch).setOnCheckedChangeListener { _, isChecked ->
             scaleBar.isRelativeMode = isChecked
+        }
+
+        crosshairSwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (::map.isInitialized) {
+                map.locationComponent.isLocationComponentEnabled = isChecked
+            }
+        }
+
+        manualDataSwitch.setOnCheckedChangeListener { _, _ ->
+            refreshFeatureLayer()
         }
 
         serialLocationManager = SerialLocationManager(this)
@@ -597,7 +611,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     .build()
 
                 map.locationComponent.activateLocationComponent(options)
-                map.locationComponent.isLocationComponentEnabled = true
+                map.locationComponent.isLocationComponentEnabled = if (::crosshairSwitch.isInitialized) crosshairSwitch.isChecked else true
                 map.locationComponent.renderMode = RenderMode.NORMAL
                 map.locationComponent.cameraMode = CameraMode.NONE
 
@@ -1369,6 +1383,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private fun refreshFeatureLayer() {
         if (!::map.isInitialized) return
         val style = map.style ?: return
+
+        if (::manualDataSwitch.isInitialized && !manualDataSwitch.isChecked) {
+            style.removeLayer("import-fill-layer")
+            style.removeLayer("import-line-layer")
+            style.removeLayer("import-circle-layer")
+            style.removeLayer("import-label-layer")
+            return
+        }
+
         try {
             val collection = FeatureCollection.fromFeatures(ArrayList(currentFeatures))
             val source = style.getSource("import-source") as? GeoJsonSource
@@ -1421,7 +1444,20 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             if (style.getLayer("import-label-layer") == null) {
                 style.addLayer(SymbolLayer("import-label-layer", "import-source").apply {
                     setProperties(
-                        PropertyFactory.textField(org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))),
+                        PropertyFactory.textField(
+                            org.maplibre.android.style.expressions.Expression.format(
+                                org.maplibre.android.style.expressions.Expression.formatEntry(
+                                    org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))
+                                ),
+                                org.maplibre.android.style.expressions.Expression.formatEntry(
+                                    org.maplibre.android.style.expressions.Expression.switchCase(
+                                        org.maplibre.android.style.expressions.Expression.has("notes"),
+                                        org.maplibre.android.style.expressions.Expression.concat(org.maplibre.android.style.expressions.Expression.literal("\n"), org.maplibre.android.style.expressions.Expression.get("notes")),
+                                        org.maplibre.android.style.expressions.Expression.literal("")
+                                    )
+                                )
+                            )
+                        ),
                         PropertyFactory.textSize(14f),
                         PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
                         PropertyFactory.textColor(Color.BLACK),
@@ -1435,7 +1471,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 })
             }
 
-            // Ensure layers are correctly ordered and visible
+            // Ensure layers are correctly ordered and visible at the top
             style.getLayer("import-fill-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
             style.getLayer("import-line-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
             style.getLayer("import-circle-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
@@ -1642,7 +1678,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 20, 60, 0) }
         val nameInput = EditText(this).apply { hint = getString(R.string.name) }
+        val notesInput = EditText(this).apply { hint = getString(R.string.notes) }
         layout.addView(nameInput)
+        layout.addView(notesInput)
 
         AlertDialog.Builder(this)
             .setTitle(R.string.add_pt_gnss)
@@ -1650,9 +1688,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             .setPositiveButton(R.string.save) { _, _ ->
                 val f = Feature.fromGeometry(Point.fromLngLat(loc.longitude, loc.latitude))
                 f.addStringProperty("name", nameInput.text.toString())
+                f.addStringProperty("notes", notesInput.text.toString())
                 currentFeatures.add(f)
                 refreshFeatureLayer()
-                Toast.makeText(this, "Point added", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.point_added), Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
@@ -1663,7 +1702,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             1 -> {
                 val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 20, 60, 0) }
                 val nameInput = EditText(this).apply { hint = getString(R.string.name) }
+                val notesInput = EditText(this).apply { hint = getString(R.string.notes) }
                 layout.addView(nameInput)
+                layout.addView(notesInput)
 
                 AlertDialog.Builder(this)
                     .setTitle(R.string.draw_pt)
@@ -1671,6 +1712,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     .setPositiveButton(R.string.save) { _, _ ->
                         val f = Feature.fromGeometry(Point.fromLngLat(latLng.longitude, latLng.latitude))
                         f.addStringProperty("name", nameInput.text.toString())
+                        f.addStringProperty("notes", notesInput.text.toString())
                         currentFeatures.add(f)
                         refreshFeatureLayer()
                         drawingMode = 0
@@ -1722,7 +1764,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (drawPoints.size >= 2) {
             val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 20, 60, 0) }
             val nameInput = EditText(this).apply { hint = getString(R.string.name) }
+            val notesInput = EditText(this).apply { hint = getString(R.string.notes) }
             layout.addView(nameInput)
+            layout.addView(notesInput)
 
             AlertDialog.Builder(this)
                 .setTitle(R.string.draw_line)
@@ -1730,6 +1774,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 .setPositiveButton(R.string.save) { _, _ ->
                     val f = Feature.fromGeometry(LineString.fromLngLats(drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) }))
                     f.addStringProperty("name", nameInput.text.toString())
+                    f.addStringProperty("notes", notesInput.text.toString())
                     currentFeatures.add(f)
                     drawPoints.clear()
                     updateTempDrawing()
@@ -1756,7 +1801,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (drawPoints.size >= 3) {
             val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(60, 20, 60, 0) }
             val nameInput = EditText(this).apply { hint = getString(R.string.name) }
+            val notesInput = EditText(this).apply { hint = getString(R.string.notes) }
             layout.addView(nameInput)
+            layout.addView(notesInput)
 
             AlertDialog.Builder(this)
                 .setTitle(R.string.draw_poly)
@@ -1766,6 +1813,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     pts.add(pts[0]) // Close
                     val f = Feature.fromGeometry(Polygon.fromLngLats(listOf(pts)))
                     f.addStringProperty("name", nameInput.text.toString())
+                    f.addStringProperty("notes", notesInput.text.toString())
                     currentFeatures.add(f)
                     drawPoints.clear()
                     updateTempDrawing()
@@ -1846,7 +1894,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 setText(f.getStringProperty("name") ?: "")
                 hint = getString(R.string.name)
             }
+            val notesInput = EditText(this).apply {
+                setText(f.getStringProperty("notes") ?: "")
+                hint = getString(R.string.notes)
+            }
             dialogView.addView(nameInput)
+            dialogView.addView(notesInput)
 
             val buttonRow1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             val buttonRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -1887,6 +1940,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 text = getString(R.string.save)
                 setOnClickListener {
                     f.addStringProperty("name", nameInput.text.toString())
+                    f.addStringProperty("notes", notesInput.text.toString())
                     refreshFeatureLayer()
                     alertDialog.dismiss()
                 }
