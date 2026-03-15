@@ -30,6 +30,7 @@
     <string name="relative_scale">Relative Scale (1:X)</string>
     <string name="show_gnss_crosshair">Show GNSS Crosshair</string>
     <string name="show_manual_geometries">Show Manual Geometries</string>
+    <string name="manual_geometries">Manual Geometries</string>
     <string name="name">Name</string>
     <string name="notes">Notes</string>
     <string name="status_edit">Edit: Tap a feature to edit or delete</string>

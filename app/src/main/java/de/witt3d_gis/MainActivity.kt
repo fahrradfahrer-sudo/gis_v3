@@ -111,7 +111,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private lateinit var scaleBar: ScaleBarView
     private lateinit var coordsText: TextView
     private lateinit var crosshairSwitch: SwitchCompat
-    private lateinit var manualDataSwitch: SwitchCompat
     private lateinit var crsSpinner: Spinner
     private lateinit var wmsLayerContainer: LinearLayout
     private lateinit var addWmsButton: Button
@@ -230,7 +229,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         scaleBar = findViewById(R.id.scaleBar)
         coordsText = findViewById(R.id.coordsText)
         crosshairSwitch = navView.findViewById(R.id.crosshairSwitch)
-        manualDataSwitch = navView.findViewById(R.id.manualDataSwitch)
         wmsLayerContainer = navView.findViewById(R.id.wmsLayerContainer)
         addWmsButton = navView.findViewById(R.id.addWmsButton)
 
@@ -262,9 +260,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
         }
 
-        manualDataSwitch.setOnCheckedChangeListener { _, _ ->
-            refreshFeatureLayer()
-        }
 
         serialLocationManager = SerialLocationManager(this)
         serialLocationManager.listener = this
@@ -508,7 +503,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             style.addImage("info-icon", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_info)!!))
 
             refreshWmsLayers()
-            refreshFeatureLayer()
             enableLocationComponent(style)
 
             if (isMeasureMode) {
@@ -524,23 +518,28 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (!::map.isInitialized) return
         val style = map.style ?: return
 
-        // First, remove all existing WMS layers/sources
-        style.layers.filter { it.id.startsWith("wms-layer-") }.forEach { style.removeLayer(it) }
+        // First, remove all existing WMS and manual layers
+        style.layers.filter { it.id.startsWith("wms-layer-") || it.id.startsWith("import-") }.forEach { style.removeLayer(it) }
         style.sources.filter { it.id.startsWith("wms-source-") }.forEach { style.removeSource(it) }
 
         // Find reference layer for z-ordering
-        var belowLayerId: String? = null
+        var topLayerId: String? = null
         for (layer in style.layers) {
             if (layer.id.contains("label", ignoreCase = true) || layer.id.contains("symbol", ignoreCase = true)) {
-                belowLayerId = layer.id
+                topLayerId = layer.id
                 break
             }
         }
 
         // Add enabled layers in correct order.
         // The last layer added to the map appears on top of previous layers.
-        // To make wmsLayers[0] the top layer, we add it LAST.
-        wmsLayers.filter { it.enabled }.reversed().forEachIndexed { index, config ->
+        // To make wmsLayers[0] the top layer, we add it LAST (reversed iteration).
+        wmsLayers.filter { it.enabled }.reversed().forEach { config ->
+            if (config.id == "internal_manual") {
+                refreshFeatureLayer(topLayerId)
+                return@forEach
+            }
+
             try {
                 var finalWmsUrl = config.url.trim()
                 if (finalWmsUrl.contains("SERVICE=WMS", ignoreCase = true)) {
@@ -570,10 +569,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 )
                 wmsLayer.setMaxZoom(40f)
 
-                if (belowLayerId != null) {
-                    style.addLayerBelow(wmsLayer, belowLayerId)
-                    // Ensure the next one is below this one
-                    belowLayerId = wmsLayer.id
+                if (topLayerId != null) {
+                    style.addLayerBelow(wmsLayer, topLayerId)
                 } else {
                     style.addLayer(wmsLayer)
                 }
@@ -789,11 +786,22 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val type = object : TypeToken<List<WmsLayerConfig>>() {}.type
             wmsLayers = Gson().fromJson<List<WmsLayerConfig>>(json, type).toMutableList()
         }
+
+        // Ensure manual geometries layer exists
+        if (wmsLayers.none { it.id == "internal_manual" }) {
+            wmsLayers.add(0, WmsLayerConfig(id = "internal_manual", name = getString(R.string.manual_geometries), url = "", layers = "", enabled = true))
+        } else {
+            // Update name in case of language change
+            wmsLayers.find { it.id == "internal_manual" }?.name = getString(R.string.manual_geometries)
+        }
+
         updateWmsLayerUI()
     }
 
     private fun saveWmsConfigs() {
-        val json = Gson().toJson(wmsLayers)
+        // Only save external WMS layers, not the internal manual one
+        val persistentLayers = wmsLayers.filter { it.id != "internal_manual" }
+        val json = Gson().toJson(persistentLayers)
         getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit()
             .putString("wms_layers_json", json)
             .apply()
@@ -809,6 +817,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 setPadding(0, 4, 0, 4)
             }
 
+            val isManual = config.id == "internal_manual"
+
             val cb = CheckBox(this).apply {
                 isChecked = config.enabled
                 setOnCheckedChangeListener { _, isChecked ->
@@ -820,7 +830,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val title = TextView(this).apply {
                 text = config.name
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                setOnClickListener { showWmsEditDialog(config) }
+                if (!isManual) setOnClickListener { showWmsEditDialog(config) }
             }
 
             val editBtn = androidx.appcompat.widget.AppCompatImageButton(this).apply {
@@ -829,6 +839,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 layoutParams = LinearLayout.LayoutParams(60, 60)
                 setPadding(10, 10, 10, 10)
                 scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                visibility = if (isManual) View.GONE else View.VISIBLE
                 setOnClickListener { showWmsEditDialog(config) }
             }
 
@@ -857,13 +868,17 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             val deleteBtn = Button(this).apply {
-                text = "X"
+                text = if (isManual) getString(R.string.clear) else "X"
                 setPadding(0,0,0,0)
-                layoutParams = LinearLayout.LayoutParams(60, 60)
+                layoutParams = LinearLayout.LayoutParams(if (isManual) 120 else 60, 60)
                 setOnClickListener {
-                    wmsLayers.removeAt(index)
-                    saveWmsConfigs()
-                    updateWmsLayerUI()
+                    if (isManual) {
+                        clearDrawing()
+                    } else {
+                        wmsLayers.removeAt(index)
+                        saveWmsConfigs()
+                        updateWmsLayerUI()
+                    }
                 }
             }
 
@@ -1380,11 +1395,22 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         updateStatus("Imported $sourceName: ${features.size} items")
     }
 
-    private fun refreshFeatureLayer() {
+    private fun refreshFeatureLayer(belowLayerId: String? = null) {
         if (!::map.isInitialized) return
         val style = map.style ?: return
 
-        if (::manualDataSwitch.isInitialized && !manualDataSwitch.isChecked) {
+        var targetBelowId = belowLayerId
+        if (targetBelowId == null) {
+            for (layer in style.layers) {
+                if (layer.id.contains("label", ignoreCase = true) || layer.id.contains("symbol", ignoreCase = true)) {
+                    targetBelowId = layer.id
+                    break
+                }
+            }
+        }
+
+        val manualConfig = wmsLayers.find { it.id == "internal_manual" }
+        if (manualConfig != null && !manualConfig.enabled) {
             style.removeLayer("import-fill-layer")
             style.removeLayer("import-line-layer")
             style.removeLayer("import-circle-layer")
@@ -1407,7 +1433,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             if (style.getLayer("import-fill-layer") == null) {
-                style.addLayer(FillLayer("import-fill-layer", "import-source").apply {
+                val layer = FillLayer("import-fill-layer", "import-source").apply {
                     setProperties(
                         PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
                         PropertyFactory.fillOutlineColor(Color.RED),
@@ -1415,10 +1441,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     )
                     minZoom = 0f
                     maxZoom = 45f
-                })
+                }
+                if (targetBelowId != null) style.addLayerBelow(layer, targetBelowId) else style.addLayer(layer)
             }
             if (style.getLayer("import-line-layer") == null) {
-                style.addLayer(LineLayer("import-line-layer", "import-source").apply {
+                val layer = LineLayer("import-line-layer", "import-source").apply {
                     setProperties(
                         PropertyFactory.lineColor(Color.RED),
                         PropertyFactory.lineWidth(2f),
@@ -1427,10 +1454,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     )
                     minZoom = 0f
                     maxZoom = 45f
-                })
+                }
+                if (targetBelowId != null) style.addLayerBelow(layer, targetBelowId) else style.addLayer(layer)
             }
             if (style.getLayer("import-circle-layer") == null) {
-                style.addLayer(CircleLayer("import-circle-layer", "import-source").apply {
+                val layer = CircleLayer("import-circle-layer", "import-source").apply {
                     setProperties(
                         PropertyFactory.circleRadius(6f),
                         PropertyFactory.circleColor(Color.RED),
@@ -1439,10 +1467,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     )
                     minZoom = 0f
                     maxZoom = 45f
-                })
+                }
+                if (targetBelowId != null) style.addLayerBelow(layer, targetBelowId) else style.addLayer(layer)
             }
             if (style.getLayer("import-label-layer") == null) {
-                style.addLayer(SymbolLayer("import-label-layer", "import-source").apply {
+                val layer = SymbolLayer("import-label-layer", "import-source").apply {
                     setProperties(
                         PropertyFactory.textField(
                             org.maplibre.android.style.expressions.Expression.format(
@@ -1468,14 +1497,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     )
                     minZoom = 0f
                     maxZoom = 45f
-                })
+                }
+                if (targetBelowId != null) style.addLayerBelow(layer, targetBelowId) else style.addLayer(layer)
             }
-
-            // Ensure layers are correctly ordered and visible at the top
-            style.getLayer("import-fill-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
-            style.getLayer("import-line-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
-            style.getLayer("import-circle-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
-            style.getLayer("import-label-layer")?.let { l -> style.removeLayer(l); style.addLayer(l) }
         } catch (e: Exception) {
             Log.e(TAG, "Error in refreshFeatureLayer: ${e.message}")
         }
@@ -2364,6 +2388,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private var lastSpeed = -1.0
 
     override fun onLocationUpdate(location: SerialLocation) {
+        if (!::map.isInitialized) return
         runOnUiThread {
             if (isMeasureMode) {
                 targetIconRotation = (targetIconRotation + 1f) % 360f
@@ -2556,4 +2581,5 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         ntripManager.release()
         if (::mapView.isInitialized) mapView.onDestroy()
     }
+
 }

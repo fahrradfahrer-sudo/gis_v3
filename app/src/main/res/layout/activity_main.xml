@@ -453,13 +453,6 @@
                 android:checked="true"
                 android:textSize="10sp" />
 
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/manualDataSwitch"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/show_manual_geometries"
-                android:checked="true"
-                android:textSize="10sp" />
 
             <Spinner
                 android:id="@+id/crsSpinner"
