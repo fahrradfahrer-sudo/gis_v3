@@ -38,6 +38,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     private var byteBufferPos = 0
     private var isProcessing = false
     private var lastUbxTime = 0L
+    private var lastHardwareGgaTime = 0L
     private var lastRtkAge: Double? = null
 
     interface LocationListener {
@@ -255,18 +256,20 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             }
             val ggaQuality = if (rtkFixed) 4 else if (rtkFloat) 5 else if (fixTypeRaw >= 2) 1 else 0
 
-            // Forward for NTRIP if hardware only sends UBX
-            val time = java.text.SimpleDateFormat("HHmmss.SS", java.util.Locale.US).format(java.util.Date())
-            val latAbs = Math.abs(lat)
-            val lonAbs = Math.abs(lon)
-            val gga = "GPGGA,$time,%02d%07.4f,%s,%03d%07.4f,%s,%d,%02d,0.9,%.2f,M,0.0,M,,".format(
-                latAbs.toInt(), (latAbs - latAbs.toInt()) * 60.0, if (lat >= 0) "N" else "S",
-                lonAbs.toInt(), (lonAbs - lonAbs.toInt()) * 60.0, if (lon >= 0) "E" else "W",
-                ggaQuality, numSV, hMSL
-            )
-            var checksum = 0
-            gga.forEach { checksum = checksum xor it.code }
-            mainHandler.post { listener?.onGgaReceived("\$$gga*%02X".format(checksum)) }
+            // Forward for NTRIP if hardware only sends UBX (or if we want to ensure NMEA is sent)
+            if (System.currentTimeMillis() - lastHardwareGgaTime > 1500) {
+                val time = java.text.SimpleDateFormat("HHmmss.SS", java.util.Locale.US).format(java.util.Date())
+                val latAbs = Math.abs(lat)
+                val lonAbs = Math.abs(lon)
+                val gga = "GPGGA,$time,%02d%07.4f,%s,%03d%07.4f,%s,%d,%02d,0.9,%.2f,M,0.0,M,,".format(
+                    latAbs.toInt(), (latAbs - latAbs.toInt()) * 60.0, if (lat >= 0) "N" else "S",
+                    lonAbs.toInt(), (lonAbs - lonAbs.toInt()) * 60.0, if (lon >= 0) "E" else "W",
+                    ggaQuality, numSV, hMSL
+                )
+                var checksum = 0
+                gga.forEach { checksum = checksum xor it.code }
+                mainHandler.post { listener?.onGgaReceived("\$$gga*%02X".format(checksum)) }
+            }
 
             lastUbxTime = System.currentTimeMillis()
             val location = SerialLocation(lat, lon, hMSL, accuracy = acc, satellites = numSV, fixType = finalFix, speed = gSpeed, rtkAge = lastRtkAge)
@@ -314,24 +317,44 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             if (type == "\$PUBX" && parts.size >= 3) {
                 val subtype = parts[1]
                 if (subtype == "00" && parts.size >= 20) { // PUBX 00
-                    // Forward GGA for NTRIP always
+                    val latRaw = parts[3]
+                    val latHem = parts[4]
+                    val lonRaw = parts[5]
+                    val lonHem = parts[6]
+                    val alt = parts[7].toDoubleOrNull() ?: 0.0
+                    val navStat = parts[8]
+                    val hAcc = parts[9].toDoubleOrNull()
+                    val speed = parts[11].toDoubleOrNull()
+                    val diffAge = parts[14].toDoubleOrNull()
+                    val numSvs = parts[18].toIntOrNull() ?: 0
+
+                    val lat = parseLatitude(latRaw, latHem)
+                    val lon = parseLongitude(lonRaw, lonHem)
+
+                    // Forward for NTRIP if no standard GGA is present
+                    if (lat != null && lon != null && System.currentTimeMillis() - lastHardwareGgaTime > 1500 && System.currentTimeMillis() - lastUbxTime > 1500) {
+                        val time = java.text.SimpleDateFormat("HHmmss.SS", java.util.Locale.US).format(java.util.Date())
+                        val latAbs = Math.abs(lat)
+                        val lonAbs = Math.abs(lon)
+                        val ggaQuality = when (navStat.trim().uppercase()) {
+                            "RK" -> 4
+                            "FR" -> 5
+                            "D2", "D3" -> 2
+                            "G2", "G3" -> 1
+                            else -> 1
+                        }
+                        val gga = "GPGGA,$time,%02d%07.4f,%s,%03d%07.4f,%s,%d,%02d,0.9,%.2f,M,0.0,M,,".format(
+                            latAbs.toInt(), (latAbs - latAbs.toInt()) * 60.0, if (lat >= 0) "N" else "S",
+                            lonAbs.toInt(), (lonAbs - lonAbs.toInt()) * 60.0, if (lon >= 0) "E" else "W",
+                            ggaQuality, numSvs, alt
+                        )
+                        var checksum = 0
+                        gga.forEach { checksum = checksum xor it.code }
+                        mainHandler.post { listener?.onGgaReceived("\$$gga*%02X".format(checksum)) }
+                    }
+
                     // but location update is suppressed if high-precision binary is active
                     if (System.currentTimeMillis() - lastUbxTime > 5000) {
-                        val latRaw = parts[3]
-                        val latHem = parts[4]
-                        val lonRaw = parts[5]
-                        val lonHem = parts[6]
-                        val alt = parts[7].toDoubleOrNull()
-                        val navStat = parts[8]
-                        val hAcc = parts[9].toDoubleOrNull()
-                        val vAcc = parts[10].toDoubleOrNull()
-                        val speed = parts[11].toDoubleOrNull()
-                        val diffAge = parts[14].toDoubleOrNull()
-                        val numSvs = parts[18].toIntOrNull()
-
-                        val lat = parseLatitude(latRaw, latHem)
-                        val lon = parseLongitude(lonRaw, lonHem)
-
                         val navStatTrimmed = navStat.trim().uppercase()
                         val fixType = when (navStatTrimmed) {
                             "G3" -> "Single"
@@ -380,6 +403,7 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 }
             } else if (type.endsWith("GGA") && parts.size >= 10) {
                 // Always forward GGA for NTRIP support
+                lastHardwareGgaTime = System.currentTimeMillis()
                 mainHandler.post { listener?.onGgaReceived(sentence) }
 
                 val latStr = parts.getOrNull(2) ?: ""
