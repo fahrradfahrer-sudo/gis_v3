@@ -25,21 +25,15 @@
                 android:id="@+id/menuButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Menu"
+                android:text="@string/menu"
                 android:textSize="12sp" />
-
-            <Spinner
-                android:id="@+id/baudSpinner"
-                android:layout_width="100dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp" />
 
             <Button
                 android:id="@+id/connectSerialButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
-                android:text="Connect"
+                android:text="@string/connect"
                 android:textSize="12sp" />
 
             <Space
@@ -56,7 +50,7 @@
                     android:id="@+id/fixStatusText"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="No Fix"
+                    android:text="@string/no_fix"
                     android:textSize="12sp"
                     android:textStyle="bold"
                     android:textColor="@android:color/black" />
@@ -68,7 +62,7 @@
                         android:id="@+id/satCountText"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Sats: 0"
+                        android:text="@string/sats"
                         android:textSize="10sp"
                         android:textColor="@android:color/black" />
                     <TextView
@@ -76,7 +70,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="8dp"
-                        android:text="Age: -"
+                        android:text="@string/age"
                         android:textSize="10sp"
                         android:textColor="@android:color/black" />
                     <TextView
@@ -84,7 +78,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="8dp"
-                        android:text="Alt: -"
+                        android:text="@string/alt"
                         android:textSize="10sp"
                         android:textColor="@android:color/black" />
                     <TextView
@@ -108,7 +102,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
-                android:text="Follow"
+                android:text="@string/follow"
                 android:textSize="10sp" />
 
             <Button
@@ -116,16 +110,9 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
-                android:text="Meas"
+                android:text="@string/meas"
                 android:textSize="12sp" />
 
-            <Button
-                android:id="@+id/settingsButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:text="Set"
-                android:textSize="12sp" />
         </LinearLayout>
 
         <HorizontalScrollView
@@ -143,35 +130,54 @@
                     android:id="@+id/drawPointButton"
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
-                    android:text="Draw Pt"
+                    android:text="@string/draw_pt"
+                    android:textSize="10sp" />
+                <Button
+                    android:id="@+id/addPointAtPosButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="4dp"
+                    android:text="@string/add_pt_gnss"
                     android:textSize="10sp" />
                 <Button
                     android:id="@+id/drawLineButton"
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginStart="4dp"
-                    android:text="Draw Line"
+                    android:text="@string/draw_line"
                     android:textSize="10sp" />
                 <Button
                     android:id="@+id/drawPolyButton"
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginStart="4dp"
-                    android:text="Draw Poly"
+                    android:text="@string/draw_poly"
                     android:textSize="10sp" />
                 <Button
                     android:id="@+id/editFeatureButton"
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginStart="4dp"
-                    android:text="Edit"
+                    android:text="@string/edit"
                     android:textSize="10sp" />
                 <Button
                     android:id="@+id/clearDrawButton"
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginStart="4dp"
-                    android:text="Clear"
+                    android:text="@string/clear"
+                    android:textSize="10sp" />
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_marginStart="8dp"
+                    android:src="@drawable/ic_magnet"
+                    app:tint="#000000" />
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/snapSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/snap"
                     android:textSize="10sp" />
             </LinearLayout>
         </HorizontalScrollView>
@@ -199,7 +205,7 @@
                 android:id="@+id/statusText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Status: Initializing"
+                android:text="@string/status_prefix"
                 android:textColor="@android:color/black"
                 android:textSize="14sp" />
         </LinearLayout>
@@ -242,6 +248,21 @@
                 android:shadowDy="1" />
         </FrameLayout>
 
+        <TextView
+            android:id="@+id/coordsText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="12dp"
+            android:layout_marginBottom="8dp"
+            android:background="#B0FFFFFF"
+            android:padding="4dp"
+            android:text="0.000000, 0.000000"
+            android:textColor="@android:color/black"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            app:layout_constraintBottom_toBottomOf="@id/mapView"
+            app:layout_constraintEnd_toEndOf="parent" />
+
         <LinearLayout
             android:id="@+id/zoomControls"
             android:layout_width="wrap_content"
@@ -249,7 +270,7 @@
             android:orientation="vertical"
             android:layout_marginEnd="16dp"
             android:layout_marginBottom="16dp"
-            app:layout_constraintBottom_toTopOf="@id/statusContainer"
+            app:layout_constraintBottom_toTopOf="@id/coordsText"
             app:layout_constraintEnd_toEndOf="parent">
 
             <Button
@@ -284,6 +305,7 @@
         android:background="@android:color/white">
 
         <LinearLayout
+            android:id="@+id/nav_content_layout"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical"
@@ -292,7 +314,43 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="GIS Menu"
+                android:text="@string/settings"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Baud:"
+                    android:textSize="12sp" />
+                <Spinner
+                    android:id="@+id/baudSpinner"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/settingsButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="NTRIP &amp; WMS Settings"
+                android:textSize="10sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginVertical="8dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/gis_menu"
                 android:textSize="18sp"
                 android:textStyle="bold"
                 android:paddingBottom="16dp" />
@@ -300,7 +358,7 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Layers"
+                android:text="@string/layers"
                 android:textStyle="bold" />
 
             <RadioGroup
@@ -318,7 +376,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="WMS Layers"
+                    android:text="@string/wms_layers"
                     android:textStyle="bold" />
                 <Button
                     android:id="@+id/addWmsButton"
@@ -344,28 +402,28 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Import Data"
+                android:text="@string/import_data"
                 android:textStyle="bold" />
 
             <Button
                 android:id="@+id/importCsvSide"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Import CSV"
+                android:text="@string/import_csv"
                 android:textSize="10sp" />
 
             <Button
                 android:id="@+id/importFileSide"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Import GIS File (.shp/.json/.qgz/.kml)"
+                android:text="@string/import_gis_file"
                 android:textSize="10sp" />
 
             <Button
                 android:id="@+id/exportDataSide"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Export Data (GeoJSON)"
+                android:text="@string/export_data"
                 android:textSize="10sp" />
 
             <View
@@ -377,15 +435,24 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Display Settings"
+                android:text="@string/display_settings"
                 android:textStyle="bold" />
 
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/scaleModeSwitch"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Relative Scale (1:X)"
+                android:text="@string/relative_scale"
                 android:textSize="10sp" />
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/crosshairSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/show_gnss_crosshair"
+                android:checked="true"
+                android:textSize="10sp" />
+
 
             <Spinner
                 android:id="@+id/crsSpinner"

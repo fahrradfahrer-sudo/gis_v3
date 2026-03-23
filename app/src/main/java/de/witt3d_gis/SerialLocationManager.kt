@@ -33,13 +33,18 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private val sentenceQueue = LinkedBlockingQueue<String>()
-    private var buffer = StringBuilder()
+    private val sentenceQueue = LinkedBlockingQueue<Any>() // Can be String (NMEA) or ByteArray (UBX)
+    private var byteBuffer = ByteArray(4096)
+    private var byteBufferPos = 0
     private var isProcessing = false
+    private var lastUbxTime = 0L
+    private var lastHardwareGgaTime = 0L
+    private var lastRtkAge: Double? = null
 
     interface LocationListener {
         fun onLocationUpdate(location: SerialLocation)
         fun onGgaReceived(sentence: String)
+        fun onSatellitesUpdate(sats: List<SatInfo>)
         fun onError(message: String)
         fun onConnected()
         fun onDisconnected()
@@ -88,9 +93,10 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
         executor.submit {
             while (isProcessing) {
                 try {
-                    val sentence = sentenceQueue.poll(500, TimeUnit.MILLISECONDS)
-                    if (sentence != null) {
-                        parseNmea(sentence)
+                    val item = sentenceQueue.poll(500, TimeUnit.MILLISECONDS)
+                    when (item) {
+                        is String -> parseNmea(item)
+                        is ByteArray -> parseUbx(item)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Worker error", e)
@@ -133,40 +139,172 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
     }
 
     override fun onNewData(data: ByteArray) {
-        try {
-            val str = String(data, Charsets.US_ASCII)
-            synchronized(buffer) {
-                if (buffer.length > 16384) buffer.setLength(0)
-                buffer.append(str)
-
-                var newlineIndex = buffer.indexOf("\n")
-                while (newlineIndex != -1) {
-                    try {
-                        if (newlineIndex < buffer.length) {
-                            val sentence = buffer.substring(0, newlineIndex).trim()
-                            buffer.delete(0, newlineIndex + 1)
-                            if (sentence.startsWith("$")) {
-                                sentenceQueue.offer(sentence)
-                            }
-                        } else {
-                            buffer.setLength(0)
-                            break
-                        }
-                    } catch (e: Exception) {
-                        buffer.setLength(0)
-                        break
-                    }
-                    newlineIndex = buffer.indexOf("\n")
+        synchronized(byteBuffer) {
+            if (byteBufferPos + data.size > byteBuffer.size) {
+                if (byteBuffer.size < 65536) {
+                    byteBuffer = byteBuffer.copyOf(byteBuffer.size * 2)
+                } else {
+                    byteBufferPos = 0
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "NMEA Buffer Error", e)
+            System.arraycopy(data, 0, byteBuffer, byteBufferPos, data.size)
+            byteBufferPos += data.size
+
+            var i = 0
+            while (i < byteBufferPos) {
+                val b = byteBuffer[i].toInt() and 0xFF
+                if (b == 0x24) { // '$'
+                    val end = findNewline(i)
+                    if (end != -1) {
+                        val sentence = String(byteBuffer, i, end - i, Charsets.US_ASCII).trim()
+                        if (sentence.isNotEmpty()) sentenceQueue.offer(sentence)
+                        i = end + 1
+                        continue
+                    } else break
+                } else if (b == 0xB5) { // UBX Sync 1
+                    if (i + 1 < byteBufferPos && (byteBuffer[i+1].toInt() and 0xFF) == 0x62) {
+                        if (i + 6 <= byteBufferPos) {
+                            val len = (byteBuffer[i+4].toInt() and 0xFF) or ((byteBuffer[i+5].toInt() and 0xFF) shl 8)
+                            val totalLen = len + 8
+                            if (totalLen > 2048) { i++; continue } // Protection
+                            if (i + totalLen <= byteBufferPos) {
+                                val msg = byteBuffer.copyOfRange(i, i + totalLen)
+                                if (verifyUbxChecksum(msg)) {
+                                    lastUbxTime = System.currentTimeMillis() // Priority timer
+                                    sentenceQueue.offer(msg)
+                                    i += totalLen
+                                    continue
+                                }
+                            } else break
+                        } else break
+                    }
+                }
+                i++
+            }
+
+            if (i > 0) {
+                if (i < byteBufferPos) {
+                    System.arraycopy(byteBuffer, i, byteBuffer, 0, byteBufferPos - i)
+                    byteBufferPos -= i
+                } else { byteBufferPos = 0 }
+            }
         }
+    }
+
+    private fun findNewline(start: Int): Int {
+        for (i in start until byteBufferPos) {
+            if (byteBuffer[i] == '\n'.toByte()) return i
+        }
+        return -1
     }
 
     override fun onRunError(e: Exception) {
         sendError("Serial Error: ${e.message}")
         disconnect()
+    }
+
+    private fun verifyUbxChecksum(data: ByteArray): Boolean {
+        if (data.size < 8) return false
+        var a = 0
+        var b = 0
+        for (i in 2 until data.size - 2) {
+            a = (a + (data[i].toInt() and 0xFF)) and 0xFF
+            b = (b + a) and 0xFF
+        }
+        return (data[data.size - 2].toInt() and 0xFF) == a && (data[data.size - 1].toInt() and 0xFF) == b
+    }
+
+    private fun parseUbx(data: ByteArray) {
+        if (data.size < 8) return
+        val cls = data[2].toInt() and 0xFF
+        val id = data[3].toInt() and 0xFF
+
+        if (cls == 0x01 && id == 0x07) { // NAV-PVT
+            val payload = data.sliceArray(6 until data.size - 2)
+            if (payload.size < 84) return
+
+            val lon = readInt32(payload, 24) / 1e7
+            val lat = readInt32(payload, 28) / 1e7
+            val hMSL = readInt32(payload, 36) / 1000.0
+
+            // Determine fix type first to include in GGA
+            val fixTypeRaw = payload[20].toInt() and 0xFF
+            val flags = payload[21].toInt() and 0xFF
+            val flags2 = payload[22].toInt() and 0xFF // contains additional fix info
+            val flags3 = if (payload.size > 22) payload[22].toInt() and 0xFF else 0 // Actually byte 22 is flags2
+            val numSV = payload[23].toInt() and 0xFF
+            val gSpeed = readInt32(payload, 60) / 1000.0 * 3.6 // mm/s to km/h
+            val acc = readUInt32(payload, 40) / 1000.0f // hAcc in m
+
+            // Improved RTK check using carrSoln field (flags bit 6-7)
+            // Some newer devices use flags2 or flags3 for RTK status too, but NAV-PVT carrSoln is standard.
+            val carrSoln = (flags shr 6) and 0x03
+            val rtkFixed = (carrSoln == 2)
+            val rtkFloat = (carrSoln == 1)
+
+            val fixType = when (fixTypeRaw) {
+                2 -> "Single"
+                3 -> "Single"
+                4 -> "GNSS+DR"
+                else -> "No Fix"
+            }
+            // Prioritize RTK status from carrSoln
+            val finalFix = when {
+                rtkFixed -> "RTK"
+                rtkFloat -> "FRTK"
+                else -> fixType
+            }
+            val ggaQuality = if (rtkFixed) 4 else if (rtkFloat) 5 else if (fixTypeRaw >= 2) 1 else 0
+
+            // Forward for NTRIP if hardware only sends UBX (or if we want to ensure NMEA is sent)
+            if (System.currentTimeMillis() - lastHardwareGgaTime > 1500) {
+                val time = java.text.SimpleDateFormat("HHmmss.SS", java.util.Locale.US).format(java.util.Date())
+                val latAbs = Math.abs(lat)
+                val lonAbs = Math.abs(lon)
+                val gga = "GPGGA,$time,%02d%07.4f,%s,%03d%07.4f,%s,%d,%02d,0.9,%.2f,M,0.0,M,,".format(
+                    latAbs.toInt(), (latAbs - latAbs.toInt()) * 60.0, if (lat >= 0) "N" else "S",
+                    lonAbs.toInt(), (lonAbs - lonAbs.toInt()) * 60.0, if (lon >= 0) "E" else "W",
+                    ggaQuality, numSV, hMSL
+                )
+                var checksum = 0
+                gga.forEach { checksum = checksum xor it.code }
+                mainHandler.post { listener?.onGgaReceived("\$$gga*%02X".format(checksum)) }
+            }
+
+            lastUbxTime = System.currentTimeMillis()
+            val location = SerialLocation(lat, lon, hMSL, accuracy = acc, satellites = numSV, fixType = finalFix, speed = gSpeed, rtkAge = lastRtkAge)
+            mainHandler.post { listener?.onLocationUpdate(location) }
+        } else if (cls == 0x01 && id == 0x35) { // NAV-SAT
+            val payload = data.sliceArray(6 until data.size - 2)
+            if (payload.size < 8) return
+            val numSvs = payload[5].toInt() and 0xFF // Corrected offset for numSvs in NAV-SAT
+            val sats = mutableListOf<SatInfo>()
+            for (i in 0 until numSvs) {
+                val off = 8 + (i * 12)
+                if (off + 12 > payload.size) break
+                val gnssId = payload[off].toInt() and 0xFF
+                val svId = payload[off + 1].toInt() and 0xFF
+                val cno = payload[off + 2].toInt() and 0xFF
+                val elev = payload[off + 3].toInt()
+                val azim = (payload[off + 4].toInt() and 0xFF) or ((payload[off + 5].toInt() and 0xFF) shl 8)
+                sats.add(SatInfo(svId, elev, azim, cno, gnssId))
+            }
+            mainHandler.post { listener?.onSatellitesUpdate(sats) }
+        }
+    }
+
+    private fun readInt32(data: ByteArray, offset: Int): Int {
+        return (data[offset].toInt() and 0xFF) or
+               ((data[offset + 1].toInt() and 0xFF) shl 8) or
+               ((data[offset + 2].toInt() and 0xFF) shl 16) or
+               ((data[offset + 3].toInt() and 0xFF) shl 24)
+    }
+
+    private fun readUInt32(data: ByteArray, offset: Int): Long {
+        return ((data[offset].toLong() and 0xFF)) or
+               ((data[offset + 1].toLong() and 0xFF) shl 8) or
+               ((data[offset + 2].toLong() and 0xFF) shl 16) or
+               ((data[offset + 3].toLong() and 0xFF) shl 24)
     }
 
     private fun parseNmea(sentence: String) {
@@ -176,7 +314,96 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             if (parts.isEmpty()) return
 
             val type = parts[0]
-            if (type.endsWith("GGA") && parts.size >= 10) {
+            if (type == "\$PUBX" && parts.size >= 3) {
+                val subtype = parts[1]
+                if (subtype == "00" && parts.size >= 20) { // PUBX 00
+                    val latRaw = parts[3]
+                    val latHem = parts[4]
+                    val lonRaw = parts[5]
+                    val lonHem = parts[6]
+                    val alt = parts[7].toDoubleOrNull() ?: 0.0
+                    val navStat = parts[8]
+                    val hAcc = parts[9].toDoubleOrNull()
+                    val speed = parts[11].toDoubleOrNull()
+                    val diffAge = parts[14].toDoubleOrNull()
+                    val numSvs = parts[18].toIntOrNull() ?: 0
+
+                    val lat = parseLatitude(latRaw, latHem)
+                    val lon = parseLongitude(lonRaw, lonHem)
+
+                    // Forward for NTRIP if no standard GGA is present
+                    if (lat != null && lon != null && System.currentTimeMillis() - lastHardwareGgaTime > 1500 && System.currentTimeMillis() - lastUbxTime > 1500) {
+                        val time = java.text.SimpleDateFormat("HHmmss.SS", java.util.Locale.US).format(java.util.Date())
+                        val latAbs = Math.abs(lat)
+                        val lonAbs = Math.abs(lon)
+                        val ggaQuality = when (navStat.trim().uppercase()) {
+                            "RK" -> 4
+                            "FR" -> 5
+                            "D2", "D3" -> 2
+                            "G2", "G3" -> 1
+                            else -> 1
+                        }
+                        val gga = "GPGGA,$time,%02d%07.4f,%s,%03d%07.4f,%s,%d,%02d,0.9,%.2f,M,0.0,M,,".format(
+                            latAbs.toInt(), (latAbs - latAbs.toInt()) * 60.0, if (lat >= 0) "N" else "S",
+                            lonAbs.toInt(), (lonAbs - lonAbs.toInt()) * 60.0, if (lon >= 0) "E" else "W",
+                            ggaQuality, numSvs, alt
+                        )
+                        var checksum = 0
+                        gga.forEach { checksum = checksum xor it.code }
+                        mainHandler.post { listener?.onGgaReceived("\$$gga*%02X".format(checksum)) }
+                    }
+
+                    // but location update is suppressed if high-precision binary is active
+                    if (System.currentTimeMillis() - lastUbxTime > 5000) {
+                        val navStatTrimmed = navStat.trim().uppercase()
+                        val fixType = when (navStatTrimmed) {
+                            "G3" -> "Single"
+                            "G2" -> "Single"
+                            "D3" -> "DGPS"
+                            "D2" -> "DGPS"
+                            "NF" -> "No Fix"
+                            "DR" -> "DR"
+                            "RK" -> "RTK"
+                            "FR" -> "FRTK"
+                        "RTK" -> "RTK"
+                        "FLOAT" -> "FRTK"
+                            else -> navStatTrimmed
+                        }
+
+                        if (diffAge != null) lastRtkAge = diffAge
+
+                        if (lat != null && lon != null) {
+                            val location = SerialLocation(lat, lon, alt, satellites = numSvs, fixType = fixType, accuracy = hAcc?.toFloat(), speed = speed, rtkAge = lastRtkAge)
+                            mainHandler.post { listener?.onLocationUpdate(location) }
+                        }
+                    }
+                } else if (subtype == "03" && parts.size >= 3) { // PUBX 03
+                    val numSvs = parts[2].toIntOrNull() ?: 0
+                    val sats = mutableListOf<SatInfo>()
+                    for (i in 0 until numSvs) {
+                        val off = 3 + (i * 6)
+                        if (off + 6 > parts.size) break
+                        val svId = parts[off].toIntOrNull() ?: 0
+                        val stat = parts[off+1] // U: used, e: enabled...
+                        val azim = parts[off+2].toIntOrNull() ?: 0
+                        val elev = parts[off+3].toIntOrNull() ?: 0
+                        val cno = parts[off+4].toIntOrNull() ?: 0
+
+                        // For PUBX 03 we don't have gnssId directly, guess by svId
+                        val gnssId = when {
+                            svId in 1..32 -> 0 // GPS
+                            svId in 120..158 -> 1 // SBAS
+                            svId in 193..197 -> 5 // QZSS
+                            svId in 211..246 -> 2 // Galileo
+                            else -> 0
+                        }
+                        sats.add(SatInfo(svId, elev, azim, cno, gnssId))
+                    }
+                    mainHandler.post { listener?.onSatellitesUpdate(sats) }
+                }
+            } else if (type.endsWith("GGA") && parts.size >= 10) {
+                // Always forward GGA for NTRIP support
+                lastHardwareGgaTime = System.currentTimeMillis()
                 mainHandler.post { listener?.onGgaReceived(sentence) }
 
                 val latStr = parts.getOrNull(2) ?: ""
@@ -195,6 +422,8 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 val alt = altStr.toDoubleOrNull()
                 val age = ageStr.toDoubleOrNull()
 
+                if (age != null) lastRtkAge = age
+
                 val fixType = when(quality) {
                     1 -> "Single"
                     2 -> "DGPS"
@@ -204,8 +433,10 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 }
 
                 if (lat != null && lon != null) {
-                    val location = SerialLocation(lat, lon, alt, satellites = sats, fixType = fixType, rtkAge = age)
-                    mainHandler.post { listener?.onLocationUpdate(location) }
+                    if (System.currentTimeMillis() - lastUbxTime > 5000) { // Only use NMEA if no UBX for 5s
+                        val location = SerialLocation(lat, lon, alt, satellites = sats, fixType = fixType, rtkAge = lastRtkAge)
+                        mainHandler.post { listener?.onLocationUpdate(location) }
+                    }
                 }
             } else if (type.endsWith("RMC") && parts.size >= 9) {
                 if (parts.getOrNull(2) == "A") {
