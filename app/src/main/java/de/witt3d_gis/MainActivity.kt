@@ -609,7 +609,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
                 map.locationComponent.activateLocationComponent(options)
                 map.locationComponent.isLocationComponentEnabled = if (::crosshairSwitch.isInitialized) crosshairSwitch.isChecked else true
-                map.locationComponent.renderMode = RenderMode.NORMAL
+                map.locationComponent.renderMode = RenderMode.GPS
                 map.locationComponent.cameraMode = CameraMode.NONE
 
                 // Ensure marker is visible
@@ -1426,7 +1426,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 source.setGeoJson(collection)
             } else {
                 val options = org.maplibre.android.style.sources.GeoJsonOptions()
-                    .withBuffer(512)
+                    .withBuffer(2048)
                     .withTolerance(0f)
                     .withMaxZoom(28)
                 style.addSource(GeoJsonSource("import-source", collection, options))
@@ -1434,6 +1434,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
             if (style.getLayer("import-fill-layer") == null) {
                 val layer = FillLayer("import-fill-layer", "import-source").apply {
+                    setFilter(org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), org.maplibre.android.style.expressions.Expression.literal("Polygon")))
                     setProperties(
                         PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
                         PropertyFactory.fillOutlineColor(Color.RED),
@@ -1446,9 +1447,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
             if (style.getLayer("import-line-layer") == null) {
                 val layer = LineLayer("import-line-layer", "import-source").apply {
+                    setFilter(
+                        org.maplibre.android.style.expressions.Expression.any(
+                            org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), org.maplibre.android.style.expressions.Expression.literal("LineString")),
+                            org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), org.maplibre.android.style.expressions.Expression.literal("Polygon"))
+                        )
+                    )
                     setProperties(
                         PropertyFactory.lineColor(Color.RED),
-                        PropertyFactory.lineWidth(2f),
+                        PropertyFactory.lineWidth(3f),
                         PropertyFactory.lineCap(org.maplibre.android.style.layers.Property.LINE_CAP_ROUND),
                         PropertyFactory.lineJoin(org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND)
                     )
@@ -1459,6 +1466,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
             if (style.getLayer("import-circle-layer") == null) {
                 val layer = CircleLayer("import-circle-layer", "import-source").apply {
+                    setFilter(org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), org.maplibre.android.style.expressions.Expression.literal("Point")))
                     setProperties(
                         PropertyFactory.circleRadius(6f),
                         PropertyFactory.circleColor(Color.RED),
@@ -1773,7 +1781,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (source != null) {
             source.setGeoJson(collection)
         } else {
-            val options = org.maplibre.android.style.sources.GeoJsonOptions().withBuffer(512).withTolerance(0f).withMaxZoom(28)
+            val options = org.maplibre.android.style.sources.GeoJsonOptions().withBuffer(2048).withTolerance(0f).withMaxZoom(28)
             style.addSource(GeoJsonSource("temp-draw-source", collection, options))
         }
 
@@ -2233,7 +2241,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             if (source != null) {
                 source.setGeoJson(collection)
             } else {
-                val options = org.maplibre.android.style.sources.GeoJsonOptions().withBuffer(512).withTolerance(0f).withMaxZoom(28)
+                val options = org.maplibre.android.style.sources.GeoJsonOptions().withBuffer(2048).withTolerance(0f).withMaxZoom(28)
                 style.addSource(GeoJsonSource("measure-source", collection, options))
             }
 
@@ -2422,8 +2430,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 // If follow is OFF, we don't move the map
             }
 
-            val fixType = location.fixType ?: getString(R.string.no_fix)
-            if (fixType != lastFixType) { fixStatusText.text = fixType; lastFixType = fixType }
+            val fixType = location.fixType
+            if (!fixType.isNullOrBlank() && fixType != lastFixType) {
+                fixStatusText.text = fixType
+                lastFixType = fixType
+            }
 
             val sats = location.satellites ?: 0
             if (sats != lastSats) { satCountText.text = getString(R.string.sats, sats); lastSats = sats }
@@ -2461,6 +2472,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
             }
             serialLocationEngine.updateLocation(androidLocation)
+            if (map.locationComponent.isLocationComponentActivated && map.locationComponent.isLocationComponentEnabled) {
+                map.locationComponent.forceLocationUpdate(androidLocation)
+            }
             if (isFirstFix && ::map.isInitialized) {
                 map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(location.latitude, location.longitude), 15.0))
                 isFirstFix = false
