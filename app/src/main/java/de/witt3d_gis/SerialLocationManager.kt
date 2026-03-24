@@ -227,34 +227,37 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
             val lat = readInt32(payload, 28) / 1e7
             val hMSL = readInt32(payload, 36) / 1000.0
 
-            // Determine fix type first to include in GGA
+            // NAV-PVT fields
             val fixTypeRaw = payload[20].toInt() and 0xFF
             val flags = payload[21].toInt() and 0xFF
-            val flags2 = payload[22].toInt() and 0xFF // contains additional fix info
-            val flags3 = if (payload.size > 22) payload[22].toInt() and 0xFF else 0 // Actually byte 22 is flags2
+            val flags2 = payload[22].toInt() and 0xFF
             val numSV = payload[23].toInt() and 0xFF
             val gSpeed = readInt32(payload, 60) / 1000.0 * 3.6 // mm/s to km/h
             val acc = readUInt32(payload, 40) / 1000.0f // hAcc in m
 
-            // Improved RTK check using carrSoln field (flags bit 6-7)
-            // Some newer devices use flags2 or flags3 for RTK status too, but NAV-PVT carrSoln is standard.
-            val carrSoln = (flags shr 6) and 0x03
-            val rtkFixed = (carrSoln == 2)
-            val rtkFloat = (carrSoln == 1)
+            val gnssFixOk = (flags and 0x01) != 0
+            val diffSoln = (flags and 0x02) != 0
+            val carrSolnFromFlags = (flags shr 6) and 0x03 // official NAV-PVT carrSoln field
+            val carrSolnFromFlags2 = (flags2 shr 6) and 0x03 // fallback for receiver fw variants
+            val carrSoln = if (carrSolnFromFlags != 0) carrSolnFromFlags else carrSolnFromFlags2
 
-            val fixType = when (fixTypeRaw) {
-                2 -> "Single"
-                3 -> "Single"
-                4 -> "GNSS+DR"
+            val finalFix = when {
+                !gnssFixOk || fixTypeRaw <= 1 || fixTypeRaw == 5 -> "No Fix"
+                carrSoln == 2 -> "RTK"
+                carrSoln == 1 -> "FRTK"
+                diffSoln -> "DGPS"
+                fixTypeRaw == 4 -> "GNSS+DR"
+                fixTypeRaw in 2..3 -> "Single"
                 else -> "No Fix"
             }
-            // Prioritize RTK status from carrSoln
-            val finalFix = when {
-                rtkFixed -> "RTK"
-                rtkFloat -> "FRTK"
-                else -> fixType
+
+            val ggaQuality = when (finalFix) {
+                "RTK" -> 4
+                "FRTK" -> 5
+                "DGPS" -> 2
+                "Single", "GNSS+DR" -> 1
+                else -> 0
             }
-            val ggaQuality = if (rtkFixed) 4 else if (rtkFloat) 5 else if (fixTypeRaw >= 2) 1 else 0
 
             // Forward for NTRIP if hardware only sends UBX (or if we want to ensure NMEA is sent)
             if (System.currentTimeMillis() - lastHardwareGgaTime > 1500) {
@@ -269,6 +272,10 @@ class SerialLocationManager(private val context: Context) : SerialInputOutputMan
                 var checksum = 0
                 gga.forEach { checksum = checksum xor it.code }
                 mainHandler.post { listener?.onGgaReceived("\$$gga*%02X".format(checksum)) }
+            }
+
+            if (finalFix != "RTK" && finalFix != "FRTK") {
+                lastRtkAge = null
             }
 
             lastUbxTime = System.currentTimeMillis()
