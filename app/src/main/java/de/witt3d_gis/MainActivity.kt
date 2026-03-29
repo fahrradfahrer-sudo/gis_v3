@@ -254,9 +254,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             scaleBar.isRelativeMode = isChecked
         }
 
-        crosshairSwitch.setOnCheckedChangeListener { _, isChecked ->
-            if (::map.isInitialized && map.locationComponent.isLocationComponentActivated) {
-                map.locationComponent.isLocationComponentEnabled = isChecked
+        crosshairSwitch.setOnCheckedChangeListener { _, _ ->
+            if (::map.isInitialized) {
+                refreshGnssLayer()
             }
         }
 
@@ -343,13 +343,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
 
         followSwitch.setOnCheckedChangeListener { _, isChecked ->
-            if (::map.isInitialized && map.locationComponent.isLocationComponentActivated) {
+            if (::map.isInitialized) {
                 if (isChecked) {
-                    // map.locationComponent.cameraMode = CameraMode.TRACKING // Using custom follow logic instead
-                    map.locationComponent.cameraMode = CameraMode.NONE
                     Toast.makeText(this, "Smooth Follow ON", Toast.LENGTH_SHORT).show()
-                } else {
-                    map.locationComponent.cameraMode = CameraMode.NONE
                 }
             }
         }
@@ -501,6 +497,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             style.addImage("measure-target", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_measure_target)!!))
             style.addImage("measure-target-last", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_measure_target_last)!!))
             style.addImage("info-icon", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_info)!!))
+            style.addImage("gnss-crosshair", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_crosshair)!!))
 
             refreshWmsLayers()
             enableLocationComponent(style)
@@ -608,21 +605,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     .build()
 
                 map.locationComponent.activateLocationComponent(options)
-                map.locationComponent.isLocationComponentEnabled = if (::crosshairSwitch.isInitialized) crosshairSwitch.isChecked else true
+                map.locationComponent.isLocationComponentEnabled = false // Use manual GNSS layer instead
                 map.locationComponent.renderMode = RenderMode.NORMAL
                 map.locationComponent.cameraMode = CameraMode.NONE
 
-                // Ensure marker is visible
-                map.locationComponent.onStart()
-                lastLocation?.let { ll ->
-                    val mock = Location("gps").apply {
-                        latitude = ll.latitude
-                        longitude = ll.longitude
-                        time = System.currentTimeMillis()
-                        accuracy = 1.0f
-                    }
-                    map.locationComponent.forceLocationUpdate(mock)
-                }
+                // Use manual refresh instead of location component
+                refreshGnssLayer()
             } catch (e: Exception) { Log.e(TAG, "LocComp error: ${e.message}") }
         }
     }
@@ -1393,6 +1381,48 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         currentFeatures = features.toMutableList()
         refreshFeatureLayer()
         updateStatus("Imported $sourceName: ${features.size} items")
+    }
+
+    private fun refreshGnssLayer() {
+        if (!::map.isInitialized) return
+        val style = map.style ?: return
+        val loc = lastLocation ?: return
+
+        try {
+            val feature = Feature.fromGeometry(Point.fromLngLat(loc.longitude, loc.latitude))
+            val collection = FeatureCollection.fromFeatures(listOf(feature))
+            val source = style.getSource("gnss-source") as? GeoJsonSource
+            if (source != null) {
+                source.setGeoJson(collection)
+            } else {
+                style.addSource(GeoJsonSource("gnss-source", collection))
+            }
+
+            if (style.getLayer("gnss-layer") == null) {
+                val layer = SymbolLayer("gnss-layer", "gnss-source").apply {
+                    setProperties(
+                        PropertyFactory.iconImage("gnss-crosshair"),
+                        PropertyFactory.iconAllowOverlap(true),
+                        PropertyFactory.iconIgnorePlacement(true),
+                        PropertyFactory.iconSize(1.0f)
+                    )
+                }
+                style.addLayer(layer)
+            }
+
+            val isEnabled = if (::crosshairSwitch.isInitialized) crosshairSwitch.isChecked else true
+            style.getLayer("gnss-layer")?.setProperties(
+                PropertyFactory.visibility(if (isEnabled) org.maplibre.android.style.layers.Property.VISIBLE else org.maplibre.android.style.layers.Property.NONE)
+            )
+
+            // Always move to top
+            style.getLayer("gnss-layer")?.let {
+                style.removeLayer(it)
+                style.addLayer(it)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in refreshGnssLayer: ${e.message}")
+        }
     }
 
     private fun refreshFeatureLayer(belowLayerId: String? = null) {
@@ -2449,6 +2479,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             lastLocation = LatLng(location.latitude, location.longitude)
+            refreshGnssLayer()
             coordsText.text = "%.7f, %.7f".format(location.latitude, location.longitude)
             if (isMeasureMode) calculateMeasureResult()
 
