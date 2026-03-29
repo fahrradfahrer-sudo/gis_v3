@@ -1429,16 +1429,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (!::map.isInitialized) return
         val style = map.style ?: return
 
-        var targetBelowId = belowLayerId
-        if (targetBelowId == null) {
-            for (layer in style.layers) {
-                if (layer.id.contains("label", ignoreCase = true) || layer.id.contains("symbol", ignoreCase = true)) {
-                    targetBelowId = layer.id
-                    break
-                }
-            }
-        }
-
         val manualConfig = wmsLayers.find { it.id == "internal_manual" }
         if (manualConfig != null && !manualConfig.enabled) {
             style.removeLayer("import-fill-layer")
@@ -1462,74 +1452,82 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 style.addSource(GeoJsonSource("import-source", collection, options))
             }
 
+            // Polygon fill
             if (style.getLayer("import-fill-layer") == null) {
-                val layer = FillLayer("import-fill-layer", "import-source").apply {
-                    setProperties(
-                        PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
-                        PropertyFactory.fillOutlineColor(Color.RED),
-                        PropertyFactory.fillAntialias(true)
-                    )
-                    minZoom = 0f
-                    maxZoom = 45f
-                }
-                if (targetBelowId != null) style.addLayerBelow(layer, targetBelowId) else style.addLayer(layer)
+                val fillLayer = FillLayer("import-fill-layer", "import-source")
+                fillLayer.setProperties(
+                    PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
+                    PropertyFactory.fillOutlineColor(Color.RED),
+                    PropertyFactory.fillAntialias(true)
+                )
+                fillLayer.setMaxZoom(45f)
+                style.addLayer(fillLayer)
             }
+
+            // Line layer
             if (style.getLayer("import-line-layer") == null) {
-                val layer = LineLayer("import-line-layer", "import-source").apply {
-                    setProperties(
-                        PropertyFactory.lineColor(Color.RED),
-                        PropertyFactory.lineWidth(2f),
-                        PropertyFactory.lineCap(org.maplibre.android.style.layers.Property.LINE_CAP_ROUND),
-                        PropertyFactory.lineJoin(org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND)
-                    )
-                    minZoom = 0f
-                    maxZoom = 45f
-                }
-                if (targetBelowId != null) style.addLayerBelow(layer, targetBelowId) else style.addLayer(layer)
+                val lineLayer = LineLayer("import-line-layer", "import-source")
+                lineLayer.setProperties(
+                    PropertyFactory.lineColor(Color.RED),
+                    PropertyFactory.lineWidth(2f),
+                    PropertyFactory.lineCap(org.maplibre.android.style.layers.Property.LINE_CAP_ROUND),
+                    PropertyFactory.lineJoin(org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND)
+                )
+                lineLayer.setMaxZoom(45f)
+                style.addLayer(lineLayer)
             }
+
+            // Circle for points
             if (style.getLayer("import-circle-layer") == null) {
-                val layer = CircleLayer("import-circle-layer", "import-source").apply {
-                    setProperties(
-                        PropertyFactory.circleRadius(6f),
-                        PropertyFactory.circleColor(Color.RED),
-                        PropertyFactory.circleStrokeWidth(2f),
-                        PropertyFactory.circleStrokeColor(Color.WHITE)
-                    )
-                    minZoom = 0f
-                    maxZoom = 45f
-                }
-                if (targetBelowId != null) style.addLayerBelow(layer, targetBelowId) else style.addLayer(layer)
+                val circleLayer = CircleLayer("import-circle-layer", "import-source")
+                circleLayer.setProperties(
+                    PropertyFactory.circleRadius(6f),
+                    PropertyFactory.circleColor(Color.RED),
+                    PropertyFactory.circleStrokeWidth(2f),
+                    PropertyFactory.circleStrokeColor(Color.WHITE)
+                )
+                circleLayer.setMaxZoom(45f)
+                style.addLayer(circleLayer)
             }
+
+            // Labels with notes support
             if (style.getLayer("import-label-layer") == null) {
-                val layer = SymbolLayer("import-label-layer", "import-source").apply {
-                    setProperties(
-                        PropertyFactory.textField(
-                            org.maplibre.android.style.expressions.Expression.format(
-                                org.maplibre.android.style.expressions.Expression.formatEntry(
-                                    org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))
-                                ),
-                                org.maplibre.android.style.expressions.Expression.formatEntry(
-                                    org.maplibre.android.style.expressions.Expression.switchCase(
-                                        org.maplibre.android.style.expressions.Expression.has("notes"),
-                                        org.maplibre.android.style.expressions.Expression.concat(org.maplibre.android.style.expressions.Expression.literal("\n"), org.maplibre.android.style.expressions.Expression.get("notes")),
-                                        org.maplibre.android.style.expressions.Expression.literal("")
-                                    )
+                val labelLayer = SymbolLayer("import-label-layer", "import-source")
+                labelLayer.setProperties(
+                    PropertyFactory.textField(
+                        org.maplibre.android.style.expressions.Expression.format(
+                            org.maplibre.android.style.expressions.Expression.formatEntry(
+                                org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))
+                            ),
+                            org.maplibre.android.style.expressions.Expression.formatEntry(
+                                org.maplibre.android.style.expressions.Expression.switchCase(
+                                    org.maplibre.android.style.expressions.Expression.has("notes"),
+                                    org.maplibre.android.style.expressions.Expression.concat(org.maplibre.android.style.expressions.Expression.literal("\n"), org.maplibre.android.style.expressions.Expression.get("notes")),
+                                    org.maplibre.android.style.expressions.Expression.literal("")
                                 )
                             )
-                        ),
-                        PropertyFactory.textSize(14f),
-                        PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
-                        PropertyFactory.textColor(Color.BLACK),
-                        PropertyFactory.textHaloColor(Color.WHITE),
-                        PropertyFactory.textHaloWidth(2.0f),
-                        PropertyFactory.textAllowOverlap(true),
-                        PropertyFactory.textIgnorePlacement(true)
-                    )
-                    minZoom = 0f
-                    maxZoom = 45f
-                }
-                if (targetBelowId != null) style.addLayerBelow(layer, targetBelowId) else style.addLayer(layer)
+                        )
+                    ),
+                    PropertyFactory.textSize(14f),
+                    PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
+                    PropertyFactory.textColor(Color.BLACK),
+                    PropertyFactory.textHaloColor(Color.WHITE),
+                    PropertyFactory.textHaloWidth(2.0f),
+                    PropertyFactory.textAllowOverlap(true),
+                    PropertyFactory.textIgnorePlacement(true)
+                )
+                labelLayer.setMaxZoom(45f)
+                style.addLayer(labelLayer)
             }
+
+            // Ensure top-level visibility by removing and re-adding if they are not at the top
+            // MapLibre's addLayer adds it to the top. To ensure they stay on top of other WMS etc.
+            // we re-order them periodically or when they are added.
+            style.getLayer("import-fill-layer")?.let { style.removeLayer(it); style.addLayer(it) }
+            style.getLayer("import-line-layer")?.let { style.removeLayer(it); style.addLayer(it) }
+            style.getLayer("import-circle-layer")?.let { style.removeLayer(it); style.addLayer(it) }
+            style.getLayer("import-label-layer")?.let { style.removeLayer(it); style.addLayer(it) }
+
         } catch (e: Exception) {
             Log.e(TAG, "Error in refreshFeatureLayer: ${e.message}")
         }
