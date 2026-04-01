@@ -39,6 +39,7 @@ import com.google.android.material.navigation.NavigationView
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
@@ -137,6 +138,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private var movingFeature: Feature? = null
     private var movingVertexIndex: Int = -1
     private var currentSats = listOf<SatInfo>()
+    private var isManualGeometriesExpanded = false
 
     private val ACTION_USB_PERMISSION = "de.witt3d_gis.USB_PERMISSION"
     private val PERMISSION_REQUEST_LOCATION = 1001
@@ -500,6 +502,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             style.addImage("gnss-crosshair", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_crosshair)!!))
 
             refreshWmsLayers()
+            refreshFeatureLayer()
             enableLocationComponent(style)
 
             if (isMeasureMode) {
@@ -515,27 +518,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (!::map.isInitialized) return
         val style = map.style ?: return
 
-        // First, remove all existing WMS and manual layers
-        style.layers.filter { it.id.startsWith("wms-layer-") || it.id.startsWith("import-") }.forEach { style.removeLayer(it) }
-        style.sources.filter { it.id.startsWith("wms-source-") || it.id == "import-source" }.forEach { style.removeSource(it) }
-
-        // Find reference layer for z-ordering
-        var topLayerId: String? = null
-        for (layer in style.layers) {
-            if (layer.id.contains("label", ignoreCase = true) || layer.id.contains("symbol", ignoreCase = true)) {
-                topLayerId = layer.id
-                break
-            }
-        }
+        // Remove only WMS layers, refreshFeatureLayer handles manual ones
+        style.layers.filter { it.id.startsWith("wms-layer-") }.forEach { style.removeLayer(it) }
+        style.sources.filter { it.id.startsWith("wms-source-") }.forEach { style.removeSource(it) }
 
         // Add enabled layers in correct order.
         // The last layer added to the map appears on top of previous layers.
         // To make wmsLayers[0] the top layer, we add it LAST (reversed iteration).
         wmsLayers.filter { it.enabled }.reversed().forEach { config ->
-            if (config.id == "internal_manual") {
-                refreshFeatureLayer(topLayerId)
-                return@forEach
-            }
+            if (config.id == "internal_manual") return@forEach
 
             try {
                 var finalWmsUrl = config.url.trim()
@@ -566,15 +557,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 )
                 wmsLayer.setMaxZoom(40f)
 
-                if (topLayerId != null) {
-                    style.addLayerBelow(wmsLayer, topLayerId)
-                } else {
-                    style.addLayer(wmsLayer)
-                }
+                style.addLayer(wmsLayer)
             } catch (e: Exception) {
                 Log.e(TAG, "WMS error for ${config.name}: ${e.message}")
             }
         }
+
+        refreshFeatureLayer()
+        ensureLayerOrder()
     }
 
     private fun updateStatus(msg: String) {
@@ -775,25 +765,28 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             wmsLayers = Gson().fromJson<List<WmsLayerConfig>>(json, type).toMutableList()
         }
 
-        // Ensure manual geometries layer exists
-        if (wmsLayers.none { it.id == "internal_manual" }) {
-            wmsLayers.add(0, WmsLayerConfig(id = "internal_manual", name = getString(R.string.manual_geometries), url = "", layers = "", enabled = true))
-        } else {
-            // Update name in case of language change
-            wmsLayers.find { it.id == "internal_manual" }?.name = getString(R.string.manual_geometries)
-        }
+        // Ensure manual geometries layer exists and is handled correctly regarding state and language
+        wmsLayers.removeAll { it.id == "internal_manual" }
+        val manualEnabled = prefs.getBoolean("manual_layer_enabled", true)
+        wmsLayers.add(0, WmsLayerConfig(id = "internal_manual", name = getString(R.string.manual_geometries), url = "", layers = "", enabled = manualEnabled))
 
         updateWmsLayerUI()
     }
 
     private fun saveWmsConfigs() {
-        // Only save external WMS layers, not the internal manual one
+        // Only save external WMS layers, internal_manual is handled on load
         val persistentLayers = wmsLayers.filter { it.id != "internal_manual" }
         val json = Gson().toJson(persistentLayers)
         getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit()
             .putString("wms_layers_json", json)
+            // Store the enabled state of the internal manual layer separately
+            .putBoolean("manual_layer_enabled", wmsLayers.find { it.id == "internal_manual" }?.enabled ?: true)
             .apply()
         refreshWmsLayers()
+    }
+
+    private fun dpToPx(dp: Int): Int {
+        return (dp * resources.displayMetrics.density).toInt()
     }
 
     private fun updateWmsLayerUI() {
@@ -815,17 +808,33 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 }
             }
 
+            val expandBtn = if (isManual) {
+                Button(this).apply {
+                    text = if (isManualGeometriesExpanded) "▼" else "▶"
+                    setPadding(0,0,0,0)
+                    layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
+                    setOnClickListener {
+                        isManualGeometriesExpanded = !isManualGeometriesExpanded
+                        updateWmsLayerUI()
+                    }
+                }
+            } else null
+
             val title = TextView(this).apply {
                 text = config.name
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                if (!isManual) setOnClickListener { showWmsEditDialog(config) }
+                setPadding(dpToPx(4), dpToPx(8), dpToPx(4), dpToPx(8))
+                if (!isManual) {
+                    setOnClickListener { showWmsEditDialog(config) }
+                    background = ContextCompat.getDrawable(this@MainActivity, android.R.drawable.list_selector_background)
+                }
             }
 
             val editBtn = androidx.appcompat.widget.AppCompatImageButton(this).apply {
                 setImageResource(R.drawable.ic_edit)
                 setBackgroundResource(android.R.color.transparent)
-                layoutParams = LinearLayout.LayoutParams(60, 60)
-                setPadding(10, 10, 10, 10)
+                layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
+                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
                 scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
                 visibility = if (isManual) View.GONE else View.VISIBLE
                 setOnClickListener { showWmsEditDialog(config) }
@@ -834,7 +843,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val upBtn = Button(this).apply {
                 text = "↑"
                 setPadding(0,0,0,0)
-                layoutParams = LinearLayout.LayoutParams(60, 60)
+                layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
                 isEnabled = index > 0
                 setOnClickListener {
                     java.util.Collections.swap(wmsLayers, index, index - 1)
@@ -846,7 +855,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val downBtn = Button(this).apply {
                 text = "↓"
                 setPadding(0,0,0,0)
-                layoutParams = LinearLayout.LayoutParams(60, 60)
+                layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
                 isEnabled = index < wmsLayers.size - 1
                 setOnClickListener {
                     java.util.Collections.swap(wmsLayers, index, index + 1)
@@ -858,10 +867,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val deleteBtn = Button(this).apply {
                 text = if (isManual) getString(R.string.clear) else "X"
                 setPadding(0,0,0,0)
-                layoutParams = LinearLayout.LayoutParams(if (isManual) 120 else 60, 60)
+                layoutParams = LinearLayout.LayoutParams(if (isManual) dpToPx(80) else dpToPx(40), dpToPx(40))
                 setOnClickListener {
                     if (isManual) {
                         clearDrawing()
+                        updateWmsLayerUI()
                     } else {
                         wmsLayers.removeAt(index)
                         saveWmsConfigs()
@@ -870,8 +880,50 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 }
             }
 
-            row.addView(cb); row.addView(title); row.addView(editBtn); row.addView(upBtn); row.addView(downBtn); row.addView(deleteBtn)
+            row.addView(cb)
+            expandBtn?.let { row.addView(it) }
+            row.addView(title); row.addView(editBtn); row.addView(upBtn); row.addView(downBtn); row.addView(deleteBtn)
             wmsLayerContainer.addView(row)
+
+            if (isManual && isManualGeometriesExpanded) {
+                currentFeatures.forEach { feature ->
+                    val featureRow = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = android.view.Gravity.CENTER_VERTICAL
+                        setPadding(dpToPx(32), dpToPx(4), 0, dpToPx(4))
+                        background = ContextCompat.getDrawable(this@MainActivity, android.R.drawable.list_selector_background)
+                    }
+
+                    val name = feature.getStringProperty("name") ?: "Unnamed"
+                    val notes = feature.getStringProperty("notes") ?: ""
+                    val displayText = if (notes.isNotEmpty()) "$name ($notes)" else name
+
+                    val featureTitle = TextView(this).apply {
+                        text = displayText
+                        textSize = 12f
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                        setOnClickListener {
+                            zoomToFeature(feature)
+                            drawerLayout.closeDrawers()
+                        }
+                    }
+
+                    val featureDeleteBtn = Button(this).apply {
+                        text = "X"
+                        setPadding(0,0,0,0)
+                        layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
+                        setOnClickListener {
+                            currentFeatures.remove(feature)
+                            refreshFeatureLayer()
+                            updateWmsLayerUI()
+                        }
+                    }
+
+                    featureRow.addView(featureTitle)
+                    featureRow.addView(featureDeleteBtn)
+                    wmsLayerContainer.addView(featureRow)
+                }
+            }
         }
     }
 
@@ -1380,6 +1432,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private fun displayImportedFeatures(features: List<Feature>, sourceName: String) {
         currentFeatures = features.toMutableList()
         refreshFeatureLayer()
+        updateWmsLayerUI()
         updateStatus("Imported $sourceName: ${features.size} items")
     }
 
@@ -1425,101 +1478,139 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
     }
 
-    private fun refreshFeatureLayer(belowLayerId: String? = null) {
+    private fun refreshFeatureLayer() {
         if (!::map.isInitialized) return
-        val style = map.style ?: return
-
-        // Force strictly removing all previous layers and source to resolve the visibility issue
-        style.removeLayer("import-fill-layer")
-        style.removeLayer("import-line-layer")
-        style.removeLayer("import-circle-layer")
-        style.removeLayer("import-label-layer")
-        style.removeSource("import-source")
+        val style = map.style ?: run {
+            // If no style, load the background-only style so we can at least show geometries
+            loadStyle(mapStyles.find { it.first == "No Base Map" }?.second ?: mapStyles[0].second)
+            return
+        }
 
         val manualConfig = wmsLayers.find { it.id == "internal_manual" }
         if (manualConfig != null && !manualConfig.enabled) {
+            style.removeLayer("import-fill-layer")
+            style.removeLayer("import-line-layer")
+            style.removeLayer("import-circle-layer")
+            style.removeLayer("import-label-layer")
+            style.removeSource("import-source")
             return
         }
 
         try {
             val collection = FeatureCollection.fromFeatures(ArrayList(currentFeatures))
-            val options = org.maplibre.android.style.sources.GeoJsonOptions()
-                .withBuffer(512)
-                .withTolerance(0f)
-                .withMaxZoom(28)
-            style.addSource(GeoJsonSource("import-source", collection, options))
-
-            // Polygon fill
-            val fillLayer = FillLayer("import-fill-layer", "import-source")
-            fillLayer.setProperties(
-                PropertyFactory.fillColor(Color.argb(50, 255, 0, 0)),
-                PropertyFactory.fillOutlineColor(Color.RED),
-                PropertyFactory.fillAntialias(true)
-            )
-            fillLayer.setMaxZoom(45f)
-
-            // Line layer
-            val lineLayer = LineLayer("import-line-layer", "import-source")
-            lineLayer.setProperties(
-                PropertyFactory.lineColor(Color.RED),
-                PropertyFactory.lineWidth(2f),
-                PropertyFactory.lineCap(org.maplibre.android.style.layers.Property.LINE_CAP_ROUND),
-                PropertyFactory.lineJoin(org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND)
-            )
-            lineLayer.setMaxZoom(45f)
-
-            // Circle for points
-            val circleLayer = CircleLayer("import-circle-layer", "import-source")
-            circleLayer.setProperties(
-                PropertyFactory.circleRadius(6f),
-                PropertyFactory.circleColor(Color.RED),
-                PropertyFactory.circleStrokeWidth(2f),
-                PropertyFactory.circleStrokeColor(Color.WHITE)
-            )
-            circleLayer.setMaxZoom(45f)
-
-            // Labels with notes support
-            val labelLayer = SymbolLayer("import-label-layer", "import-source")
-            labelLayer.setProperties(
-                PropertyFactory.textField(
-                    org.maplibre.android.style.expressions.Expression.format(
-                        org.maplibre.android.style.expressions.Expression.formatEntry(
-                            org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))
-                        ),
-                        org.maplibre.android.style.expressions.Expression.formatEntry(
-                            org.maplibre.android.style.expressions.Expression.switchCase(
-                                org.maplibre.android.style.expressions.Expression.has("notes"),
-                                org.maplibre.android.style.expressions.Expression.concat(org.maplibre.android.style.expressions.Expression.literal("\n"), org.maplibre.android.style.expressions.Expression.get("notes")),
-                                org.maplibre.android.style.expressions.Expression.literal("")
-                            )
-                        )
-                    )
-                ),
-                PropertyFactory.textSize(14f),
-                PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
-                PropertyFactory.textColor(Color.BLACK),
-                PropertyFactory.textHaloColor(Color.WHITE),
-                PropertyFactory.textHaloWidth(2.0f),
-                PropertyFactory.textAllowOverlap(true),
-                PropertyFactory.textIgnorePlacement(true)
-            )
-            labelLayer.setMaxZoom(45f)
-
-            // Respect belowLayerId if specified, otherwise add to top
-            if (belowLayerId != null && style.getLayer(belowLayerId) != null) {
-                style.addLayerBelow(fillLayer, belowLayerId)
-                style.addLayerAbove(lineLayer, fillLayer.id)
-                style.addLayerAbove(circleLayer, lineLayer.id)
-                style.addLayerAbove(labelLayer, circleLayer.id)
+            val source = style.getSourceAs<GeoJsonSource>("import-source")
+            if (source != null) {
+                source.setGeoJson(collection)
             } else {
-                style.addLayer(fillLayer)
-                style.addLayer(lineLayer)
-                style.addLayer(circleLayer)
-                style.addLayer(labelLayer)
+                val options = org.maplibre.android.style.sources.GeoJsonOptions()
+                    .withBuffer(512)
+                    .withTolerance(0f)
+                    .withMaxZoom(32)
+                style.addSource(GeoJsonSource("import-source", collection, options))
             }
 
+            if (style.getLayer("import-fill-layer") == null) {
+                style.addLayer(FillLayer("import-fill-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.fillColor(Color.argb(70, 255, 0, 255)), // Magenta transparent
+                        PropertyFactory.fillOutlineColor(Color.MAGENTA),
+                        PropertyFactory.fillAntialias(true),
+                        PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+                    )
+                    setMaxZoom(45f)
+                })
+            }
+
+            if (style.getLayer("import-line-layer") == null) {
+                style.addLayerAbove(LineLayer("import-line-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.lineColor(Color.MAGENTA),
+                        PropertyFactory.lineWidth(4f),
+                        PropertyFactory.lineCap(org.maplibre.android.style.layers.Property.LINE_CAP_ROUND),
+                        PropertyFactory.lineJoin(org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND),
+                        PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+                    )
+                    setMaxZoom(45f)
+                }, "import-fill-layer")
+            }
+
+            if (style.getLayer("import-circle-layer") == null) {
+                style.addLayerAbove(CircleLayer("import-circle-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.circleRadius(8f),
+                        PropertyFactory.circleColor(Color.MAGENTA),
+                        PropertyFactory.circleStrokeWidth(2f),
+                        PropertyFactory.circleStrokeColor(Color.WHITE),
+                        PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+                    )
+                    setMaxZoom(45f)
+                }, "import-line-layer")
+            }
+
+            if (style.getLayer("import-label-layer") == null) {
+                style.addLayerAbove(SymbolLayer("import-label-layer", "import-source").apply {
+                    setProperties(
+                        PropertyFactory.textField(
+                            org.maplibre.android.style.expressions.Expression.format(
+                                org.maplibre.android.style.expressions.Expression.formatEntry(
+                                    org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))
+                                ),
+                                org.maplibre.android.style.expressions.Expression.formatEntry(
+                                    org.maplibre.android.style.expressions.Expression.switchCase(
+                                        org.maplibre.android.style.expressions.Expression.has("notes"),
+                                        org.maplibre.android.style.expressions.Expression.concat(org.maplibre.android.style.expressions.Expression.literal("\n"), org.maplibre.android.style.expressions.Expression.get("notes")),
+                                        org.maplibre.android.style.expressions.Expression.literal("")
+                                    )
+                                )
+                            )
+                        ),
+                        PropertyFactory.textSize(16f),
+                        PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
+                        PropertyFactory.textColor(Color.BLACK),
+                        PropertyFactory.textHaloColor(Color.WHITE),
+                        PropertyFactory.textHaloWidth(2.0f),
+                        PropertyFactory.textAllowOverlap(true),
+                        PropertyFactory.textIgnorePlacement(true),
+                        PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+                    )
+                    setMaxZoom(45f)
+                }, "import-circle-layer")
+            }
+
+            ensureLayerOrder()
         } catch (e: Exception) {
             Log.e(TAG, "Error in refreshFeatureLayer: ${e.message}")
+        }
+    }
+
+    private fun ensureLayerOrder() {
+        if (!::map.isInitialized) return
+        val style = map.style ?: return
+
+        // 1. All WMS layers (already handled by refreshWmsLayers)
+
+        // 2. Manual geometries (always above WMS)
+        val importLayers = listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer")
+        importLayers.forEach { id ->
+            style.getLayer(id)?.let {
+                style.removeLayer(it)
+                style.addLayer(it)
+            }
+        }
+
+        // 3. Measurement tools
+        val measureLayers = listOf("measure-line", "measure-circles", "measure-points")
+        measureLayers.forEach { id ->
+            style.getLayer(id)?.let {
+                style.removeLayer(it)
+                style.addLayer(it)
+            }
+        }
+
+        // 4. GNSS Crosshair (Highest)
+        style.getLayer("gnss-layer")?.let {
+            style.removeLayer(it)
+            style.addLayer(it)
         }
     }
 
@@ -1733,6 +1824,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 f.addStringProperty("notes", notesInput.text.toString())
                 currentFeatures.add(f)
                 refreshFeatureLayer()
+                updateWmsLayerUI()
                 Toast.makeText(this, getString(R.string.point_added), Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton(R.string.cancel, null)
@@ -1757,6 +1849,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         f.addStringProperty("notes", notesInput.text.toString())
                         currentFeatures.add(f)
                         refreshFeatureLayer()
+                        updateWmsLayerUI()
                         drawingMode = 0
                         updateDrawingButtons()
                     }
@@ -1821,6 +1914,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     drawPoints.clear()
                     updateTempDrawing()
                     refreshFeatureLayer()
+                    updateWmsLayerUI()
                     drawingMode = 0
                     updateDrawingButtons()
                 }
@@ -1860,6 +1954,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     drawPoints.clear()
                     updateTempDrawing()
                     refreshFeatureLayer()
+                    updateWmsLayerUI()
                     drawingMode = 0
                     updateDrawingButtons()
                 }
@@ -1984,6 +2079,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     f.addStringProperty("name", nameInput.text.toString())
                     f.addStringProperty("notes", notesInput.text.toString())
                     refreshFeatureLayer()
+                    updateWmsLayerUI()
                     alertDialog.dismiss()
                 }
             }
@@ -1992,6 +2088,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 setOnClickListener {
                     currentFeatures.remove(f)
                     refreshFeatureLayer()
+                    updateWmsLayerUI()
                     alertDialog.dismiss()
                 }
             }
@@ -2090,6 +2187,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
         }
         refreshFeatureLayer()
+        updateWmsLayerUI()
     }
 
     private fun finishMovingFeature(newLatLng: LatLng) {
@@ -2134,6 +2232,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         movingFeature = null
         movingVertexIndex = -1
         refreshFeatureLayer()
+        updateWmsLayerUI()
         updateDrawingButtons()
     }
 
@@ -2142,6 +2241,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         drawPoints.clear()
         updateTempDrawing()
         refreshFeatureLayer()
+        updateWmsLayerUI()
         updateStatus(getString(R.string.data_cleared))
     }
 
@@ -2207,6 +2307,35 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
         }
         return intersectCount % 2 != 0
+    }
+
+    private fun zoomToFeature(feature: Feature) {
+        val geom = feature.geometry() ?: return
+        try {
+            when (geom) {
+                is Point -> {
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(geom.latitude(), geom.longitude()), 18.0))
+                }
+                is LineString -> {
+                    val coords = geom.coordinates()
+                    if (coords.isNotEmpty()) {
+                        val bounds = LatLngBounds.Builder()
+                        coords.forEach { bounds.include(LatLng(it.latitude(), it.longitude())) }
+                        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(), 100))
+                    }
+                }
+                is Polygon -> {
+                    val coords = geom.coordinates().flatten()
+                    if (coords.isNotEmpty()) {
+                        val bounds = LatLngBounds.Builder()
+                        coords.forEach { bounds.include(LatLng(it.latitude(), it.longitude())) }
+                        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(), 100))
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error zooming to feature: ${e.message}")
+        }
     }
 
     private fun toggleMeasureMode() {
