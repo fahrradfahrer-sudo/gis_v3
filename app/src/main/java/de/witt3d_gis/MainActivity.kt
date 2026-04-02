@@ -1469,9 +1469,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             )
 
             // Always move to top
-            style.getLayer("gnss-layer")?.let {
-                style.removeLayer(it)
-                style.addLayer(it)
+            style.getLayer("gnss-layer")?.let { layer ->
+                style.removeLayer("gnss-layer")
+                style.addLayer(layer)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in refreshGnssLayer: ${e.message}")
@@ -1514,12 +1514,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     setProperties(
                         PropertyFactory.fillColor(Color.argb(70, 255, 0, 255)), // Magenta transparent
                         PropertyFactory.fillOutlineColor(Color.MAGENTA),
-                        PropertyFactory.fillAntialias(true),
-                        PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+                        PropertyFactory.fillAntialias(true)
                     )
-                    setMaxZoom(45f)
                 })
             }
+            style.getLayer("import-fill-layer")?.setProperties(
+                PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+            )
+            style.getLayer("import-fill-layer")?.setMaxZoom(35f)
 
             if (style.getLayer("import-line-layer") == null) {
                 style.addLayerAbove(LineLayer("import-line-layer", "import-source").apply {
@@ -1527,12 +1529,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         PropertyFactory.lineColor(Color.MAGENTA),
                         PropertyFactory.lineWidth(4f),
                         PropertyFactory.lineCap(org.maplibre.android.style.layers.Property.LINE_CAP_ROUND),
-                        PropertyFactory.lineJoin(org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND),
-                        PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+                        PropertyFactory.lineJoin(org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND)
                     )
-                    setMaxZoom(45f)
                 }, "import-fill-layer")
             }
+            style.getLayer("import-line-layer")?.setProperties(
+                PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+            )
+            style.getLayer("import-line-layer")?.setMaxZoom(35f)
 
             if (style.getLayer("import-circle-layer") == null) {
                 style.addLayerAbove(CircleLayer("import-circle-layer", "import-source").apply {
@@ -1540,12 +1544,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         PropertyFactory.circleRadius(8f),
                         PropertyFactory.circleColor(Color.MAGENTA),
                         PropertyFactory.circleStrokeWidth(2f),
-                        PropertyFactory.circleStrokeColor(Color.WHITE),
-                        PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+                        PropertyFactory.circleStrokeColor(Color.WHITE)
                     )
-                    setMaxZoom(45f)
                 }, "import-line-layer")
             }
+            style.getLayer("import-circle-layer")?.setProperties(
+                PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+            )
+            style.getLayer("import-circle-layer")?.setMaxZoom(35f)
 
             if (style.getLayer("import-label-layer") == null) {
                 style.addLayerAbove(SymbolLayer("import-label-layer", "import-source").apply {
@@ -1570,12 +1576,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         PropertyFactory.textHaloColor(Color.WHITE),
                         PropertyFactory.textHaloWidth(2.0f),
                         PropertyFactory.textAllowOverlap(true),
-                        PropertyFactory.textIgnorePlacement(true),
-                        PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+                        PropertyFactory.textIgnorePlacement(true)
                     )
-                    setMaxZoom(45f)
                 }, "import-circle-layer")
             }
+            style.getLayer("import-label-layer")?.setProperties(
+                PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
+            )
+            style.getLayer("import-label-layer")?.setMaxZoom(35f)
 
             ensureLayerOrder()
         } catch (e: Exception) {
@@ -1592,25 +1600,27 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         // 2. Manual geometries (always above WMS)
         val importLayers = listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer")
         importLayers.forEach { id ->
-            style.getLayer(id)?.let {
-                style.removeLayer(it)
-                style.addLayer(it)
+            style.getLayer(id)?.let { layer ->
+                style.removeLayer(id)
+                style.addLayer(layer)
+                // Re-assert visibility just in case
+                layer.setProperties(PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE))
             }
         }
 
         // 3. Measurement tools
         val measureLayers = listOf("measure-line", "measure-circles", "measure-points")
         measureLayers.forEach { id ->
-            style.getLayer(id)?.let {
-                style.removeLayer(it)
-                style.addLayer(it)
+            style.getLayer(id)?.let { layer ->
+                style.removeLayer(id)
+                style.addLayer(layer)
             }
         }
 
         // 4. GNSS Crosshair (Highest)
-        style.getLayer("gnss-layer")?.let {
-            style.removeLayer(it)
-            style.addLayer(it)
+        style.getLayer("gnss-layer")?.let { layer ->
+            style.removeLayer("gnss-layer")
+            style.addLayer(layer)
         }
     }
 
