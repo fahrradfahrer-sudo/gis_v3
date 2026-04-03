@@ -160,8 +160,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         "Google Maps" to "{\"version\": 8, \"sources\": {\"google\": {\"type\": \"raster\", \"tiles\": [\"https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}\"], \"tileSize\": 256}}, \"layers\": [{\"id\": \"google\", \"type\": \"raster\", \"source\": \"google\"}]}",
         "Google Satellite" to "{\"version\": 8, \"sources\": {\"google-sat\": {\"type\": \"raster\", \"tiles\": [\"https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}\"], \"tileSize\": 256}}, \"layers\": [{\"id\": \"google-sat\", \"type\": \"raster\", \"source\": \"google-sat\"}]}",
         "OpenStreetMap" to "{\"version\": 8, \"sources\": {\"osm\": {\"type\": \"raster\", \"tiles\": [\"https://a.tile.openstreetmap.org/{z}/{x}/{y}.png\"], \"tileSize\": 256}}, \"layers\": [{\"id\": \"osm\", \"type\": \"raster\", \"source\": \"osm\"}]}",
-        "No Base Map" to "{\"version\": 8, \"sources\": {\"empty\": {\"type\": \"vector\", \"tiles\": []}}, \"layers\": [{\"id\": \"background\", \"type\": \"background\", \"paint\": {\"background-color\": \"#FFFFFF\"}}]}"
+        "No Base Map" to "{\"version\": 8, \"sources\": {\"empty\": {\"type\": \"vector\", \"tiles\": []}}, \"layers\": [{\"id\": \"background\", \"type\": \"background\", \"paint\": {\"background-color\": \"#FFFFFF\"}}]}",
+        "High Contrast (Yellow)" to "{\"version\": 8, \"sources\": {\"empty\": {\"type\": \"vector\", \"tiles\": []}}, \"layers\": [{\"id\": \"background\", \"type\": \"background\", \"paint\": {\"background-color\": \"#FFFF00\"}}]}"
     )
+
+    // DIAGNOSTIC MODE: Set to true to isolate manual geometries for testing
+    private val diagnosticIsolationMode = false
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -332,7 +336,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             findViewById<ScaleBarView>(R.id.scaleBar).setMap(mapObj)
-            loadStyle(mapStyles[0].second)
+            // DIAGNOSTIC: Default to No Base Map for testing
+            if (diagnosticIsolationMode) {
+                loadStyle(mapStyles.find { it.first == "No Base Map" }?.second ?: mapStyles[0].second)
+            } else {
+                loadStyle(mapStyles[0].second)
+            }
         }
 
         connectSerialButton.setOnClickListener {
@@ -521,6 +530,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         // Remove only WMS layers, refreshFeatureLayer handles manual ones
         style.layers.filter { it.id.startsWith("wms-layer-") }.forEach { style.removeLayer(it) }
         style.sources.filter { it.id.startsWith("wms-source-") }.forEach { style.removeSource(it) }
+
+        // DIAGNOSTIC: Skip adding WMS layers if isolation is requested
+        if (diagnosticIsolationMode) {
+            refreshFeatureLayer()
+            return
+        }
 
         // Add enabled layers in correct order.
         // The last layer added to the map appears on top of previous layers.
@@ -1439,6 +1454,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private fun refreshGnssLayer() {
         if (!::map.isInitialized) return
         val style = map.style ?: return
+
+        // DIAGNOSTIC: Skip adding GNSS layers if isolation is requested
+        if (diagnosticIsolationMode) {
+            style.removeLayer("gnss-layer")
+            style.removeSource("gnss-source")
+            return
+        }
+
         val loc = lastLocation ?: return
 
         try {
@@ -1482,12 +1505,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         runOnUiThread {
             if (!::map.isInitialized) return@runOnUiThread
             val style = map.style ?: run {
+                // If no style, load the background-only style so we can at least show geometries
                 loadStyle(mapStyles.find { it.first == "No Base Map" }?.second ?: mapStyles[0].second)
                 return@runOnUiThread
             }
 
             val manualConfig = wmsLayers.find { it.id == "internal_manual" }
-            if (manualConfig != null && !manualConfig.enabled) {
+            if (manualConfig != null && !manualConfig.enabled && !diagnosticIsolationMode) {
                 style.removeLayer("import-fill-layer")
                 style.removeLayer("import-line-layer")
                 style.removeLayer("import-circle-layer")
@@ -1497,7 +1521,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             try {
-                val collection = FeatureCollection.fromFeatures(ArrayList(currentFeatures))
+                val allFeatures = ArrayList(currentFeatures)
+                if (diagnosticIsolationMode) {
+                    allFeatures.add(Feature.fromGeometry(Point.fromLngLat(8.24750, 49.56333)).apply {
+                        addStringProperty("name", "DEBUG_CENTER")
+                    })
+                }
+
+                val collection = FeatureCollection.fromFeatures(allFeatures)
                 val source = style.getSourceAs<GeoJsonSource>("import-source")
                 if (source != null) {
                     source.setGeoJson(collection)
@@ -1517,7 +1548,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.fillAntialias(true),
                             PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
                         )
-                        setMaxZoom(32f)
+                        setMaxZoom(45f)
                     })
                 }
 
@@ -1530,7 +1561,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.lineJoin(org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND),
                             PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
                         )
-                        setMaxZoom(32f)
+                        setMaxZoom(45f)
                     }, "import-fill-layer")
                 }
 
@@ -1543,7 +1574,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.circleStrokeColor(Color.WHITE),
                             PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
                         )
-                        setMaxZoom(32f)
+                        setMaxZoom(45f)
                     }, "import-line-layer")
                 }
 
@@ -1573,18 +1604,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.textIgnorePlacement(true),
                             PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)
                         )
-                        setMaxZoom(32f)
+                        setMaxZoom(45f)
                     }, "import-circle-layer")
                 }
 
-                // Explicitly force visibility and zoom for existing layers
-                val manualLayers = listOf("import-fill-layer", "import-line-layer", "import-circle-layer", "import-label-layer")
-                manualLayers.forEach { id ->
-                    style.getLayer(id)?.setProperties(PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE))
-                    style.getLayer(id)?.setMaxZoom(32f)
-                }
-
-                updateStatus("Features: ${currentFeatures.size}")
                 ensureLayerOrder()
             } catch (e: Exception) {
                 Log.e(TAG, "Error in refreshFeatureLayer: ${e.message}")
@@ -1604,6 +1627,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             style.getLayer(id)?.let {
                 style.removeLayer(it)
                 style.addLayer(it)
+                // Force visibility just in case some other logic hid it
+                it.setProperties(org.maplibre.android.style.layers.PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE))
             }
         }
 
@@ -1875,6 +1900,11 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     private fun updateTempDrawing() {
         if (!::map.isInitialized) return
         val style = map.style ?: return
+
+        // DIAGNOSTIC: Trigger refreshFeatureLayer to show geometries even before saving
+        if (diagnosticIsolationMode) {
+            refreshFeatureLayer()
+        }
 
         if (drawPoints.isEmpty()) {
             style.removeLayer("temp-draw-layer")
