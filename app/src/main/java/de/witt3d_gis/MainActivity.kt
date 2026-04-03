@@ -1517,7 +1517,18 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             try {
-                val collection = FeatureCollection.fromFeatures(ArrayList(currentFeatures))
+                val allFeatures = mutableListOf<Feature>()
+                allFeatures.addAll(currentFeatures)
+
+                // UNIFY: Include active drawing points in the permanent layer
+                if (drawPoints.isNotEmpty()) {
+                    drawPoints.forEach { allFeatures.add(Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude))) }
+                    if (drawPoints.size >= 2) {
+                        allFeatures.add(Feature.fromGeometry(LineString.fromLngLats(drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) })))
+                    }
+                }
+
+                val collection = FeatureCollection.fromFeatures(allFeatures)
                 var source = style.getSourceAs<GeoJsonSource>("import-source")
                 if (source != null) {
                     source.setGeoJson(collection)
@@ -1890,40 +1901,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun updateTempDrawing() {
-        if (!::map.isInitialized) return
-        val style = map.style ?: return
-
-        // DIAGNOSTIC: Trigger refreshFeatureLayer to show geometries even before saving
-        if (diagnosticIsolationMode) {
-            refreshFeatureLayer()
-        }
-
-        if (drawPoints.isEmpty()) {
-            style.removeLayer("temp-draw-layer")
-            style.removeSource("temp-draw-source")
-            return
-        }
-
-        val features = mutableListOf<Feature>()
-        drawPoints.forEach { features.add(Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude))) }
-        if (drawPoints.size >= 2) {
-            features.add(Feature.fromGeometry(LineString.fromLngLats(drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) })))
-        }
-
-        val collection = FeatureCollection.fromFeatures(features)
-        val source = style.getSourceAs<GeoJsonSource>("temp-draw-source")
-        if (source != null) {
-            source.setGeoJson(collection)
-        } else {
-            val options = org.maplibre.android.style.sources.GeoJsonOptions().withBuffer(512).withTolerance(0f).withMaxZoom(28)
-            style.addSource(GeoJsonSource("temp-draw-source", collection, options))
-        }
-
-        if (style.getLayer("temp-draw-layer") == null) {
-            style.addLayer(LineLayer("temp-draw-layer", "temp-draw-source").apply {
-                setProperties(PropertyFactory.lineColor(Color.BLUE), PropertyFactory.lineWidth(2f))
-            })
-        }
+        // UNIFY: Simply trigger refreshFeatureLayer which now includes drawPoints
+        refreshFeatureLayer()
     }
 
     private fun finishLine() {
