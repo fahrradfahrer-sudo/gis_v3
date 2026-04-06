@@ -1443,10 +1443,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun displayImportedFeatures(features: List<Feature>, sourceName: String) {
-        currentFeatures = features.toMutableList()
-        refreshManualLayers()
-        updateWmsLayerUI()
-        updateStatus("Imported $sourceName: ${features.size} items")
+        runOnUiThread {
+            currentFeatures = features.toMutableList()
+            refreshManualLayers()
+            updateWmsLayerUI()
+            updateStatus("Imported $sourceName: ${features.size} items")
+        }
     }
 
     private fun refreshGnssLayer() {
@@ -1504,9 +1506,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
                 // 1. Saved features (Magenta)
                 currentFeatures.forEach { f ->
-                    // Create a copy of properties with the isTemp property to avoid modifying originals and ensure reactivity
-                    val originalProps = f.properties() ?: com.google.gson.JsonObject()
-                    val props = com.google.gson.JsonParser.parseString(originalProps.toString()).asJsonObject
+                    val props = com.google.gson.JsonObject()
+                    f.properties()?.entrySet()?.forEach { props.add(it.key, it.value) }
                     props.addProperty("isTemp", false)
                     features.add(Feature.fromGeometry(f.geometry(), props))
                 }
@@ -1514,25 +1515,25 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 // 2. Active drawing (Red)
                 if (drawPoints.isNotEmpty()) {
                     drawPoints.forEach { latLng ->
-                        val f = Feature.fromGeometry(Point.fromLngLat(latLng.longitude, latLng.latitude))
-                        f.addBooleanProperty("isTemp", true)
-                        f.addStringProperty("name", "") // Ensure property exists for label expression
-                        features.add(f)
+                        val props = com.google.gson.JsonObject()
+                        props.addProperty("isTemp", true)
+                        props.addProperty("name", "")
+                        features.add(Feature.fromGeometry(Point.fromLngLat(latLng.longitude, latLng.latitude), props))
                     }
                     if (drawPoints.size >= 2) {
                         val linePts = drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) }
-                        val f = Feature.fromGeometry(LineString.fromLngLats(linePts))
-                        f.addBooleanProperty("isTemp", true)
-                        f.addStringProperty("name", "")
-                        features.add(f)
+                        val props = com.google.gson.JsonObject()
+                        props.addProperty("isTemp", true)
+                        props.addProperty("name", "")
+                        features.add(Feature.fromGeometry(LineString.fromLngLats(linePts), props))
 
                         if (drawingMode == 3 && drawPoints.size >= 3) {
                              val polyPts = linePts.toMutableList()
                              polyPts.add(polyPts[0])
-                             val pf = Feature.fromGeometry(Polygon.fromLngLats(listOf(polyPts)))
-                             pf.addBooleanProperty("isTemp", true)
-                             pf.addStringProperty("name", "")
-                             features.add(pf)
+                             val pProps = com.google.gson.JsonObject()
+                             pProps.addProperty("isTemp", true)
+                             pProps.addProperty("name", "")
+                             features.add(Feature.fromGeometry(Polygon.fromLngLats(listOf(polyPts)), pProps))
                         }
                     }
                 }
@@ -1540,35 +1541,35 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 if (diagnosticIsolationMode) {
                     val center = map.cameraPosition.target
                     if (center != null) {
-                        features.add(Feature.fromGeometry(Point.fromLngLat(center.longitude, center.latitude)).apply {
-                            addStringProperty("name", "CENTER")
-                            addBooleanProperty("isTemp", false)
-                        })
+                        val cProps = com.google.gson.JsonObject()
+                        cProps.addProperty("name", "CENTER")
+                        cProps.addProperty("isTemp", false)
+                        features.add(Feature.fromGeometry(Point.fromLngLat(center.longitude, center.latitude), cProps))
                     }
-                    features.add(Feature.fromGeometry(Point.fromLngLat(0.0, 0.0)).apply {
-                        addStringProperty("name", "ZERO")
-                        addBooleanProperty("isTemp", false)
-                    })
+                    val zProps = com.google.gson.JsonObject()
+                    zProps.addProperty("name", "ZERO")
+                    zProps.addProperty("isTemp", false)
+                    features.add(Feature.fromGeometry(Point.fromLngLat(0.0, 0.0), zProps))
                 }
 
                 val collection = FeatureCollection.fromFeatures(features)
                 Log.d(TAG, "refreshManualLayers: total=${features.size} drawingMode=$drawingMode")
                 if (drawPoints.isNotEmpty()) updateStatus("Drawing: ${drawPoints.size} pts")
 
-                // Robust source management: always use setGeoJson with FeatureCollection object to ensure full update
+                // ALWAYS USE JSON STRING FOR SOURCE UPDATE (Often more reliable across versions)
                 var source = style.getSource("manual-source") as? GeoJsonSource
                 if (source == null) {
                     val options = org.maplibre.android.style.sources.GeoJsonOptions().withMaxZoom(28).withBuffer(512).withTolerance(0f)
-                    source = GeoJsonSource("manual-source", collection, options)
+                    source = GeoJsonSource("manual-source", collection.toJson(), options)
                     style.addSource(source)
                 } else {
-                    source.setGeoJson(collection)
+                    source.setGeoJson(collection.toJson())
                 }
 
-                // DATA DRIVEN STYLING - Using color() expression for better compatibility
+                // Use literal color hex strings for expressions
                 val colorExpr = org.maplibre.android.style.expressions.Expression.switchCase(
-                    org.maplibre.android.style.expressions.Expression.get("isTemp"), org.maplibre.android.style.expressions.Expression.color(Color.RED),
-                    org.maplibre.android.style.expressions.Expression.color(Color.MAGENTA)
+                    org.maplibre.android.style.expressions.Expression.get("isTemp"), org.maplibre.android.style.expressions.Expression.literal("#FF0000"), // Red
+                    org.maplibre.android.style.expressions.Expression.literal("#FF00FF")  // Magenta
                 )
 
                 if (style.getLayer("manual-fill-layer") == null) {
@@ -1578,6 +1579,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.fillOpacity(0.5f)
                         )
                         setMaxZoom(40f)
+                        setMinZoom(0f)
                     })
                 } else {
                     style.getLayer("manual-fill-layer")?.setProperties(PropertyFactory.fillColor(colorExpr))
@@ -1587,9 +1589,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     style.addLayer(LineLayer("manual-line-layer", "manual-source").apply {
                         setProperties(
                             PropertyFactory.lineColor(colorExpr),
-                            PropertyFactory.lineWidth(8f)
+                            PropertyFactory.lineWidth(8f),
+                            PropertyFactory.lineCap(org.maplibre.android.style.layers.Property.LINE_CAP_ROUND),
+                            PropertyFactory.lineJoin(org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND)
                         )
                         setMaxZoom(40f)
+                        setMinZoom(0f)
                     })
                 } else {
                     style.getLayer("manual-line-layer")?.setProperties(PropertyFactory.lineColor(colorExpr))
@@ -1601,9 +1606,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.circleRadius(12f),
                             PropertyFactory.circleColor(colorExpr),
                             PropertyFactory.circleStrokeWidth(3f),
-                            PropertyFactory.circleStrokeColor(Color.WHITE)
+                            PropertyFactory.circleStrokeColor("#FFFFFF")
                         )
                         setMaxZoom(40f)
+                        setMinZoom(0f)
                     })
                 } else {
                     style.getLayer("manual-circle-layer")?.setProperties(PropertyFactory.circleColor(colorExpr))
@@ -1619,8 +1625,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         setProperties(
                             PropertyFactory.textField(formatExpr),
                             PropertyFactory.textSize(14f),
-                            PropertyFactory.textColor(Color.BLACK),
-                            PropertyFactory.textHaloColor(Color.WHITE),
+                            PropertyFactory.textColor("#000000"),
+                            PropertyFactory.textHaloColor("#FFFFFF"),
                             PropertyFactory.textHaloWidth(2f),
                             PropertyFactory.textAnchor(org.maplibre.android.style.layers.Property.TEXT_ANCHOR_TOP),
                             PropertyFactory.textOffset(arrayOf(0f, 1f)),
@@ -1628,6 +1634,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.textIgnorePlacement(true)
                         )
                         setMaxZoom(40f)
+                        setMinZoom(0f)
                     })
                 }
 
@@ -1653,9 +1660,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             "measure-line", "measure-circles", "measure-points",
             "gnss-layer"
         )
-
-        // Robust re-ordering without full removal to prevent flickering and state loss
-        val currentTop = style.layers.lastOrNull()?.id ?: return
 
         for (id in layersToOrder) {
             val layer = style.getLayer(id)
