@@ -1504,8 +1504,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
                 // 1. Saved features (Magenta)
                 currentFeatures.forEach { f ->
-                    // Create a copy with the isTemp property to avoid modifying originals and ensure reactivity
-                    val props = f.properties() ?: com.google.gson.JsonObject()
+                    // Create a copy of properties with the isTemp property to avoid modifying originals and ensure reactivity
+                    val originalProps = f.properties() ?: com.google.gson.JsonObject()
+                    val props = com.google.gson.JsonParser.parseString(originalProps.toString()).asJsonObject
                     props.addProperty("isTemp", false)
                     features.add(Feature.fromGeometry(f.geometry(), props))
                 }
@@ -1513,22 +1514,25 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 // 2. Active drawing (Red)
                 if (drawPoints.isNotEmpty()) {
                     drawPoints.forEach { latLng ->
-                        features.add(Feature.fromGeometry(Point.fromLngLat(latLng.longitude, latLng.latitude)).apply {
-                            addBooleanProperty("isTemp", true)
-                        })
+                        val f = Feature.fromGeometry(Point.fromLngLat(latLng.longitude, latLng.latitude))
+                        f.addBooleanProperty("isTemp", true)
+                        f.addStringProperty("name", "") // Ensure property exists for label expression
+                        features.add(f)
                     }
                     if (drawPoints.size >= 2) {
                         val linePts = drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) }
-                        features.add(Feature.fromGeometry(LineString.fromLngLats(linePts)).apply {
-                            addBooleanProperty("isTemp", true)
-                        })
+                        val f = Feature.fromGeometry(LineString.fromLngLats(linePts))
+                        f.addBooleanProperty("isTemp", true)
+                        f.addStringProperty("name", "")
+                        features.add(f)
 
                         if (drawingMode == 3 && drawPoints.size >= 3) {
                              val polyPts = linePts.toMutableList()
                              polyPts.add(polyPts[0])
-                             features.add(Feature.fromGeometry(Polygon.fromLngLats(listOf(polyPts))).apply {
-                                 addBooleanProperty("isTemp", true)
-                             })
+                             val pf = Feature.fromGeometry(Polygon.fromLngLats(listOf(polyPts)))
+                             pf.addBooleanProperty("isTemp", true)
+                             pf.addStringProperty("name", "")
+                             features.add(pf)
                         }
                     }
                 }
@@ -1551,14 +1555,14 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 Log.d(TAG, "refreshManualLayers: total=${features.size} drawingMode=$drawingMode")
                 if (drawPoints.isNotEmpty()) updateStatus("Drawing: ${drawPoints.size} pts")
 
-                // Robust source management: always use setGeoJson with a JSON string to ensure full update
+                // Robust source management: always use setGeoJson with FeatureCollection object to ensure full update
                 var source = style.getSource("manual-source") as? GeoJsonSource
                 if (source == null) {
-                    val options = org.maplibre.android.style.sources.GeoJsonOptions().withMaxZoom(24).withBuffer(512).withTolerance(0f)
-                    source = GeoJsonSource("manual-source", collection.toJson(), options)
+                    val options = org.maplibre.android.style.sources.GeoJsonOptions().withMaxZoom(28).withBuffer(512).withTolerance(0f)
+                    source = GeoJsonSource("manual-source", collection, options)
                     style.addSource(source)
                 } else {
-                    source.setGeoJson(collection.toJson())
+                    source.setGeoJson(collection)
                 }
 
                 // DATA DRIVEN STYLING - Using color() expression for better compatibility
@@ -1573,6 +1577,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.fillColor(colorExpr),
                             PropertyFactory.fillOpacity(0.5f)
                         )
+                        setMaxZoom(40f)
                     })
                 } else {
                     style.getLayer("manual-fill-layer")?.setProperties(PropertyFactory.fillColor(colorExpr))
@@ -1584,6 +1589,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.lineColor(colorExpr),
                             PropertyFactory.lineWidth(8f)
                         )
+                        setMaxZoom(40f)
                     })
                 } else {
                     style.getLayer("manual-line-layer")?.setProperties(PropertyFactory.lineColor(colorExpr))
@@ -1597,6 +1603,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.circleStrokeWidth(3f),
                             PropertyFactory.circleStrokeColor(Color.WHITE)
                         )
+                        setMaxZoom(40f)
                     })
                 } else {
                     style.getLayer("manual-circle-layer")?.setProperties(PropertyFactory.circleColor(colorExpr))
@@ -1604,7 +1611,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
                 if (style.getLayer("manual-label-layer") == null) {
                     val formatExpr = org.maplibre.android.style.expressions.Expression.format(
-                        org.maplibre.android.style.expressions.Expression.formatEntry(org.maplibre.android.style.expressions.Expression.get("name")),
+                        org.maplibre.android.style.expressions.Expression.formatEntry(org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))),
                         org.maplibre.android.style.expressions.Expression.formatEntry("\n"),
                         org.maplibre.android.style.expressions.Expression.formatEntry(org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("notes"), org.maplibre.android.style.expressions.Expression.literal("")))
                     )
@@ -1620,6 +1627,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                             PropertyFactory.textAllowOverlap(true),
                             PropertyFactory.textIgnorePlacement(true)
                         )
+                        setMaxZoom(40f)
                     })
                 }
 
@@ -1640,17 +1648,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (!::map.isInitialized) return
         val style = map.style ?: return
 
-        // We want to ensure layers are on top.
-        // To maintain order (Fill at bottom, Label at top), we move them one by one to the top.
         val layersToOrder = listOf(
             "manual-fill-layer", "manual-line-layer", "manual-circle-layer", "manual-label-layer",
             "measure-line", "measure-circles", "measure-points",
             "gnss-layer"
         )
 
+        // Robust re-ordering without full removal to prevent flickering and state loss
+        val currentTop = style.layers.lastOrNull()?.id ?: return
+
         for (id in layersToOrder) {
-            style.getLayer(id)?.let { layer ->
-                style.removeLayer(layer)
+            val layer = style.getLayer(id)
+            if (layer != null) {
+                style.removeLayer(id)
                 style.addLayer(layer)
             }
         }
