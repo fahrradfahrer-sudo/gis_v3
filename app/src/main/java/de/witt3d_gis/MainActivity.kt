@@ -239,6 +239,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         wmsLayerContainer = navView.findViewById(R.id.wmsLayerContainer)
         addWmsButton = navView.findViewById(R.id.addWmsButton)
 
+        loadManualFeatures()
         loadWmsConfigs()
 
         addWmsButton.setOnClickListener { showWmsEditDialog(null) }
@@ -784,6 +785,39 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         updateWmsLayerUI()
     }
 
+    private fun saveManualFeatures() {
+        try {
+            if (currentFeatures.isEmpty()) {
+                getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit()
+                    .remove("manual_features_json")
+                    .apply()
+                return
+            }
+            val json = FeatureCollection.fromFeatures(currentFeatures).toJson()
+            getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit()
+                .putString("manual_features_json", json)
+                .apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving manual features: ${e.message}")
+        }
+    }
+
+    private fun loadManualFeatures() {
+        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val json = prefs.getString("manual_features_json", null)
+        if (json != null) {
+            try {
+                val collection = FeatureCollection.fromJson(json)
+                if (collection.features() != null) {
+                    currentFeatures = collection.features()!!.toMutableList()
+                    Log.d(TAG, "Loaded ${currentFeatures.size} manual features")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading manual features: ${e.message}")
+            }
+        }
+    }
+
     private fun saveWmsConfigs() {
         // Only save external WMS layers, internal_manual is handled on load
         val persistentLayers = wmsLayers.filter { it.id != "internal_manual" }
@@ -801,6 +835,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun updateWmsLayerUI() {
+        saveManualFeatures()
         wmsLayerContainer.removeAllViews()
         wmsLayers.forEachIndexed { index, config ->
             val row = LinearLayout(this).apply {
@@ -1502,24 +1537,30 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             try {
                 // 1. Update SAVED features (Magenta)
                 val savedFeatures = FeatureCollection.fromFeatures(currentFeatures)
+                Log.d(TAG, "refreshManualLayers: Updating manual-saved-source with ${currentFeatures.size} features")
                 updateGeoJsonSource(style, "manual-saved-source", savedFeatures)
 
                 ensureManualLayer(style, "manual-saved-fill", "manual-saved-source", FillLayer::class.java) { layer ->
-                    layer.setProperties(PropertyFactory.fillColor(Color.MAGENTA), PropertyFactory.fillOpacity(0.4f))
+                    layer.setProperties(PropertyFactory.fillColor(Color.MAGENTA), PropertyFactory.fillOpacity(0.5f))
                 }
                 ensureManualLayer(style, "manual-saved-line", "manual-saved-source", LineLayer::class.java) { layer ->
-                    layer.setProperties(PropertyFactory.lineColor(Color.MAGENTA), PropertyFactory.lineWidth(6f))
+                    layer.setProperties(PropertyFactory.lineColor(Color.MAGENTA), PropertyFactory.lineWidth(8f))
                 }
                 ensureManualLayer(style, "manual-saved-circle", "manual-saved-source", CircleLayer::class.java) { layer ->
-                    layer.setProperties(PropertyFactory.circleRadius(8f), PropertyFactory.circleColor(Color.MAGENTA), PropertyFactory.circleStrokeWidth(2f), PropertyFactory.circleStrokeColor(Color.WHITE))
+                    layer.setProperties(PropertyFactory.circleRadius(10f), PropertyFactory.circleColor(Color.MAGENTA), PropertyFactory.circleStrokeWidth(3f), PropertyFactory.circleStrokeColor(Color.WHITE))
                 }
                 ensureManualLayer(style, "manual-saved-label", "manual-saved-source", SymbolLayer::class.java) { layer ->
-                    val formatExpr = org.maplibre.android.style.expressions.Expression.format(
-                        org.maplibre.android.style.expressions.Expression.formatEntry(org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))),
-                        org.maplibre.android.style.expressions.Expression.formatEntry("\n"),
-                        org.maplibre.android.style.expressions.Expression.formatEntry(org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("notes"), org.maplibre.android.style.expressions.Expression.literal("")))
+                    layer.setProperties(
+                        PropertyFactory.textField(org.maplibre.android.style.expressions.Expression.get("name")),
+                        PropertyFactory.textSize(14f),
+                        PropertyFactory.textColor(Color.BLACK),
+                        PropertyFactory.textHaloColor(Color.WHITE),
+                        PropertyFactory.textHaloWidth(2f),
+                        PropertyFactory.textAnchor(org.maplibre.android.style.layers.Property.TEXT_ANCHOR_TOP),
+                        PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
+                        PropertyFactory.textAllowOverlap(true),
+                        PropertyFactory.textIgnorePlacement(true)
                     )
-                    layer.setProperties(PropertyFactory.textField(formatExpr), PropertyFactory.textSize(12f), PropertyFactory.textColor(Color.BLACK), PropertyFactory.textHaloColor(Color.WHITE), PropertyFactory.textHaloWidth(2f), PropertyFactory.textAnchor(org.maplibre.android.style.layers.Property.TEXT_ANCHOR_TOP), PropertyFactory.textOffset(arrayOf(0f, 1f)))
                 }
 
                 // 2. Update ACTIVE DRAWING features (Red)
@@ -1536,6 +1577,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     }
                 }
                 updateGeoJsonSource(style, "manual-draw-source", FeatureCollection.fromFeatures(drawFeaturesList))
+                Log.d(TAG, "refreshManualLayers: Updating manual-draw-source with ${drawFeaturesList.size} features")
 
                 ensureManualLayer(style, "manual-draw-fill", "manual-draw-source", FillLayer::class.java) { layer ->
                     layer.setProperties(PropertyFactory.fillColor(Color.RED), PropertyFactory.fillOpacity(0.5f))
@@ -1549,15 +1591,23 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
                 // Handle global visibility toggle from drawer
                 val config = wmsLayers.find { it.id == "internal_manual" }
-                val visibility = if (config?.enabled ?: true) org.maplibre.android.style.layers.Property.VISIBLE else org.maplibre.android.style.layers.Property.NONE
-                listOf("manual-saved-fill", "manual-saved-line", "manual-saved-circle", "manual-saved-label", "manual-draw-fill", "manual-draw-line", "manual-draw-circle").forEach {
+                val manualVisible = config?.enabled ?: true
+                val visibility = if (manualVisible) org.maplibre.android.style.layers.Property.VISIBLE else org.maplibre.android.style.layers.Property.NONE
+
+                listOf("manual-saved-fill", "manual-saved-line", "manual-saved-circle", "manual-saved-label").forEach {
                     style.getLayer(it)?.setProperties(PropertyFactory.visibility(visibility))
                 }
 
-                ensureLayerOrder()
+                // Active drawing is ALWAYS visible during drawing
+                listOf("manual-draw-fill", "manual-draw-line", "manual-draw-circle").forEach {
+                    style.getLayer(it)?.setProperties(PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE))
+                }
+
                 if (drawPoints.isNotEmpty()) updateStatus("Drawing: ${drawPoints.size} pts")
             } catch (e: Exception) {
                 Log.e(TAG, "Error in refreshManualLayers: ${e.message}")
+            } finally {
+                ensureLayerOrder()
             }
         }
     }
