@@ -535,10 +535,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             return
         }
 
-        // Add enabled layers in correct order.
-        // The last layer added to the map appears on top of previous layers.
-        // To make wmsLayers[0] the top layer, we add it LAST (reversed iteration).
-        wmsLayers.filter { it.enabled }.reversed().forEach { config ->
+        // Add enabled WMS layers at the absolute bottom (index 0)
+        wmsLayers.filter { it.enabled }.forEach { config ->
             if (config.id == "internal_manual") return@forEach
 
             try {
@@ -559,7 +557,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 }
 
                 val tileSet = TileSet("2.2.0", finalWmsUrl)
-                tileSet.maxZoom = 24f
+                tileSet.maxZoom = 40f
                 val source = RasterSource("wms-source-${config.id}", tileSet, 512)
                 style.addSource(source)
 
@@ -570,7 +568,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 )
                 wmsLayer.setMaxZoom(40f)
 
-                style.addLayer(wmsLayer)
+                style.addLayerAt(wmsLayer, 0)
             } catch (e: Exception) {
                 Log.e(TAG, "WMS error for ${config.name}: ${e.message}")
             }
@@ -1443,10 +1441,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
     }
 
     private fun displayImportedFeatures(features: List<Feature>, sourceName: String) {
-        currentFeatures = features.toMutableList()
-        refreshManualLayers()
-        updateWmsLayerUI()
-        updateStatus("Imported $sourceName: ${features.size} items")
+        runOnUiThread {
+            currentFeatures = features.toMutableList()
+            refreshManualLayers()
+            updateWmsLayerUI()
+            updateStatus("Imported $sourceName: ${features.size} items")
+        }
     }
 
     private fun refreshGnssLayer() {
@@ -1500,139 +1500,93 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val style = map.style ?: return@runOnUiThread
 
             try {
-                val features = mutableListOf<Feature>()
+                // 1. Update SAVED features (Magenta)
+                val savedFeatures = FeatureCollection.fromFeatures(currentFeatures)
+                updateGeoJsonSource(style, "manual-saved-source", savedFeatures)
 
-                // 1. Saved features (Magenta)
-                currentFeatures.forEach { f ->
-                    // Create a copy with the isTemp property to avoid modifying originals and ensure reactivity
-                    val props = f.properties() ?: com.google.gson.JsonObject()
-                    props.addProperty("isTemp", false)
-                    features.add(Feature.fromGeometry(f.geometry(), props))
+                ensureManualLayer(style, "manual-saved-fill", "manual-saved-source", FillLayer::class.java) { layer ->
+                    layer.setProperties(PropertyFactory.fillColor(Color.MAGENTA), PropertyFactory.fillOpacity(0.4f))
                 }
-
-                // 2. Active drawing (Red)
-                if (drawPoints.isNotEmpty()) {
-                    drawPoints.forEach { latLng ->
-                        features.add(Feature.fromGeometry(Point.fromLngLat(latLng.longitude, latLng.latitude)).apply {
-                            addBooleanProperty("isTemp", true)
-                        })
-                    }
-                    if (drawPoints.size >= 2) {
-                        val linePts = drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) }
-                        features.add(Feature.fromGeometry(LineString.fromLngLats(linePts)).apply {
-                            addBooleanProperty("isTemp", true)
-                        })
-
-                        if (drawingMode == 3 && drawPoints.size >= 3) {
-                             val polyPts = linePts.toMutableList()
-                             polyPts.add(polyPts[0])
-                             features.add(Feature.fromGeometry(Polygon.fromLngLats(listOf(polyPts))).apply {
-                                 addBooleanProperty("isTemp", true)
-                             })
-                        }
-                    }
+                ensureManualLayer(style, "manual-saved-line", "manual-saved-source", LineLayer::class.java) { layer ->
+                    layer.setProperties(PropertyFactory.lineColor(Color.MAGENTA), PropertyFactory.lineWidth(6f))
                 }
-
-                if (diagnosticIsolationMode) {
-                    val center = map.cameraPosition.target
-                    if (center != null) {
-                        features.add(Feature.fromGeometry(Point.fromLngLat(center.longitude, center.latitude)).apply {
-                            addStringProperty("name", "CENTER")
-                            addBooleanProperty("isTemp", false)
-                        })
-                    }
-                    features.add(Feature.fromGeometry(Point.fromLngLat(0.0, 0.0)).apply {
-                        addStringProperty("name", "ZERO")
-                        addBooleanProperty("isTemp", false)
-                    })
+                ensureManualLayer(style, "manual-saved-circle", "manual-saved-source", CircleLayer::class.java) { layer ->
+                    layer.setProperties(PropertyFactory.circleRadius(8f), PropertyFactory.circleColor(Color.MAGENTA), PropertyFactory.circleStrokeWidth(2f), PropertyFactory.circleStrokeColor(Color.WHITE))
                 }
-
-                val collection = FeatureCollection.fromFeatures(features)
-                Log.d(TAG, "refreshManualLayers: total=${features.size} drawingMode=$drawingMode")
-                if (drawPoints.isNotEmpty()) updateStatus("Drawing: ${drawPoints.size} pts")
-
-                // Robust source management: always use setGeoJson with a JSON string to ensure full update
-                var source = style.getSource("manual-source") as? GeoJsonSource
-                if (source == null) {
-                    val options = org.maplibre.android.style.sources.GeoJsonOptions().withMaxZoom(24).withBuffer(512).withTolerance(0f)
-                    source = GeoJsonSource("manual-source", collection.toJson(), options)
-                    style.addSource(source)
-                } else {
-                    source.setGeoJson(collection.toJson())
-                }
-
-                // DATA DRIVEN STYLING - Using color() expression for better compatibility
-                val colorExpr = org.maplibre.android.style.expressions.Expression.switchCase(
-                    org.maplibre.android.style.expressions.Expression.get("isTemp"), org.maplibre.android.style.expressions.Expression.color(Color.RED),
-                    org.maplibre.android.style.expressions.Expression.color(Color.MAGENTA)
-                )
-
-                if (style.getLayer("manual-fill-layer") == null) {
-                    style.addLayer(FillLayer("manual-fill-layer", "manual-source").apply {
-                        setProperties(
-                            PropertyFactory.fillColor(colorExpr),
-                            PropertyFactory.fillOpacity(0.5f)
-                        )
-                    })
-                } else {
-                    style.getLayer("manual-fill-layer")?.setProperties(PropertyFactory.fillColor(colorExpr))
-                }
-
-                if (style.getLayer("manual-line-layer") == null) {
-                    style.addLayer(LineLayer("manual-line-layer", "manual-source").apply {
-                        setProperties(
-                            PropertyFactory.lineColor(colorExpr),
-                            PropertyFactory.lineWidth(8f)
-                        )
-                    })
-                } else {
-                    style.getLayer("manual-line-layer")?.setProperties(PropertyFactory.lineColor(colorExpr))
-                }
-
-                if (style.getLayer("manual-circle-layer") == null) {
-                    style.addLayer(CircleLayer("manual-circle-layer", "manual-source").apply {
-                        setProperties(
-                            PropertyFactory.circleRadius(12f),
-                            PropertyFactory.circleColor(colorExpr),
-                            PropertyFactory.circleStrokeWidth(3f),
-                            PropertyFactory.circleStrokeColor(Color.WHITE)
-                        )
-                    })
-                } else {
-                    style.getLayer("manual-circle-layer")?.setProperties(PropertyFactory.circleColor(colorExpr))
-                }
-
-                if (style.getLayer("manual-label-layer") == null) {
+                ensureManualLayer(style, "manual-saved-label", "manual-saved-source", SymbolLayer::class.java) { layer ->
                     val formatExpr = org.maplibre.android.style.expressions.Expression.format(
-                        org.maplibre.android.style.expressions.Expression.formatEntry(org.maplibre.android.style.expressions.Expression.get("name")),
+                        org.maplibre.android.style.expressions.Expression.formatEntry(org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("name"), org.maplibre.android.style.expressions.Expression.literal(""))),
                         org.maplibre.android.style.expressions.Expression.formatEntry("\n"),
                         org.maplibre.android.style.expressions.Expression.formatEntry(org.maplibre.android.style.expressions.Expression.coalesce(org.maplibre.android.style.expressions.Expression.get("notes"), org.maplibre.android.style.expressions.Expression.literal("")))
                     )
-                    style.addLayer(SymbolLayer("manual-label-layer", "manual-source").apply {
-                        setProperties(
-                            PropertyFactory.textField(formatExpr),
-                            PropertyFactory.textSize(14f),
-                            PropertyFactory.textColor(Color.BLACK),
-                            PropertyFactory.textHaloColor(Color.WHITE),
-                            PropertyFactory.textHaloWidth(2f),
-                            PropertyFactory.textAnchor(org.maplibre.android.style.layers.Property.TEXT_ANCHOR_TOP),
-                            PropertyFactory.textOffset(arrayOf(0f, 1f)),
-                            PropertyFactory.textAllowOverlap(true),
-                            PropertyFactory.textIgnorePlacement(true)
-                        )
-                    })
+                    layer.setProperties(PropertyFactory.textField(formatExpr), PropertyFactory.textSize(12f), PropertyFactory.textColor(Color.BLACK), PropertyFactory.textHaloColor(Color.WHITE), PropertyFactory.textHaloWidth(2f), PropertyFactory.textAnchor(org.maplibre.android.style.layers.Property.TEXT_ANCHOR_TOP), PropertyFactory.textOffset(arrayOf(0f, 1f)))
                 }
 
+                // 2. Update ACTIVE DRAWING features (Red)
+                val drawFeaturesList = mutableListOf<Feature>()
+                if (drawPoints.isNotEmpty()) {
+                    drawPoints.forEach { drawFeaturesList.add(Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude))) }
+                    if (drawPoints.size >= 2) {
+                        val pts = drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) }
+                        drawFeaturesList.add(Feature.fromGeometry(LineString.fromLngLats(pts)))
+                        if (drawingMode == 3 && drawPoints.size >= 3) {
+                            val poly = pts.toMutableList(); poly.add(poly[0])
+                            drawFeaturesList.add(Feature.fromGeometry(Polygon.fromLngLats(listOf(poly))))
+                        }
+                    }
+                }
+                updateGeoJsonSource(style, "manual-draw-source", FeatureCollection.fromFeatures(drawFeaturesList))
+
+                ensureManualLayer(style, "manual-draw-fill", "manual-draw-source", FillLayer::class.java) { layer ->
+                    layer.setProperties(PropertyFactory.fillColor(Color.RED), PropertyFactory.fillOpacity(0.5f))
+                }
+                ensureManualLayer(style, "manual-draw-line", "manual-draw-source", LineLayer::class.java) { layer ->
+                    layer.setProperties(PropertyFactory.lineColor(Color.RED), PropertyFactory.lineWidth(8f))
+                }
+                ensureManualLayer(style, "manual-draw-circle", "manual-draw-source", CircleLayer::class.java) { layer ->
+                    layer.setProperties(PropertyFactory.circleRadius(10f), PropertyFactory.circleColor(Color.RED), PropertyFactory.circleStrokeWidth(3f), PropertyFactory.circleStrokeColor(Color.WHITE))
+                }
+
+                // Handle global visibility toggle from drawer
                 val config = wmsLayers.find { it.id == "internal_manual" }
                 val visibility = if (config?.enabled ?: true) org.maplibre.android.style.layers.Property.VISIBLE else org.maplibre.android.style.layers.Property.NONE
-                listOf("manual-fill-layer", "manual-line-layer", "manual-circle-layer", "manual-label-layer").forEach {
+                listOf("manual-saved-fill", "manual-saved-line", "manual-saved-circle", "manual-saved-label", "manual-draw-fill", "manual-draw-line", "manual-draw-circle").forEach {
                     style.getLayer(it)?.setProperties(PropertyFactory.visibility(visibility))
                 }
 
                 ensureLayerOrder()
+                if (drawPoints.isNotEmpty()) updateStatus("Drawing: ${drawPoints.size} pts")
             } catch (e: Exception) {
                 Log.e(TAG, "Error in refreshManualLayers: ${e.message}")
             }
+        }
+    }
+
+    private fun updateGeoJsonSource(style: Style, id: String, collection: FeatureCollection) {
+        val source = style.getSource(id) as? GeoJsonSource
+        if (source != null) {
+            source.setGeoJson(collection)
+        } else {
+            val options = org.maplibre.android.style.sources.GeoJsonOptions().withMaxZoom(28).withBuffer(512).withTolerance(0f)
+            style.addSource(GeoJsonSource(id, collection, options))
+        }
+    }
+
+    private fun <T : org.maplibre.android.style.layers.Layer> ensureManualLayer(style: Style, id: String, sourceId: String, type: Class<T>, config: (T) -> Unit) {
+        var layer = style.getLayer(id) as? T
+        if (layer == null) {
+            layer = when (type) {
+                FillLayer::class.java -> FillLayer(id, sourceId) as T
+                LineLayer::class.java -> LineLayer(id, sourceId) as T
+                CircleLayer::class.java -> CircleLayer(id, sourceId) as T
+                SymbolLayer::class.java -> SymbolLayer(id, sourceId) as T
+                else -> throw IllegalArgumentException("Unsupported layer type")
+            }
+            config(layer)
+            layer.setMaxZoom(40f)
+            style.addLayer(layer)
+        } else {
+            config(layer)
         }
     }
 
@@ -1640,18 +1594,18 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         if (!::map.isInitialized) return
         val style = map.style ?: return
 
-        // We want to ensure layers are on top.
-        // To maintain order (Fill at bottom, Label at top), we move them one by one to the top.
         val layersToOrder = listOf(
-            "manual-fill-layer", "manual-line-layer", "manual-circle-layer", "manual-label-layer",
+            "manual-saved-fill", "manual-saved-line", "manual-saved-circle", "manual-saved-label",
+            "manual-draw-fill", "manual-draw-line", "manual-draw-circle",
             "measure-line", "measure-circles", "measure-points",
             "gnss-layer"
         )
 
         for (id in layersToOrder) {
-            style.getLayer(id)?.let { layer ->
-                style.removeLayer(layer)
-                style.addLayer(layer)
+            val layer = style.getLayer(id)
+            if (layer != null) {
+                style.removeLayer(id)
+                style.addLayerAt(layer, style.layers.size)
             }
         }
     }
