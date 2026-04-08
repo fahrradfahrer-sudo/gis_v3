@@ -1816,12 +1816,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         updateDrawingButtons()
         if (drawingMode != 0) {
             isMeasureMode = false
-            measureButton.text = "Meas"
+            measureButton.text = getString(R.string.meas)
             measurePoints.clear()
             map.style?.let {
-                it.removeLayer("measure-line")
-                it.removeLayer("measure-points")
-                it.removeSource("measure-source")
+                it.getLayer("measure-line")?.let { l -> it.removeLayer(l) }
+                it.getLayer("measure-points")?.let { l -> it.removeLayer(l) }
+                it.getLayer("measure-circles")?.let { l -> it.removeLayer(l) }
+                it.getSource("measure-source")?.let { s -> it.removeSource(s) }
             }
         }
     }
