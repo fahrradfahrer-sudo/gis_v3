@@ -809,7 +809,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             try {
                 val collection = FeatureCollection.fromJson(json)
                 if (collection.features() != null) {
-                    currentFeatures = collection.features()!!.toMutableList()
+                    currentFeatures = collection.features()!!.map {
+                        if (it.id() == null) Feature.fromGeometry(it.geometry(), it.properties(), java.util.UUID.randomUUID().toString())
+                        else it
+                    }.toMutableList()
                     Log.d(TAG, "Loaded ${currentFeatures.size} manual features")
                 }
             } catch (e: Exception) {
@@ -1477,7 +1480,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
     private fun displayImportedFeatures(features: List<Feature>, sourceName: String) {
         runOnUiThread {
-            currentFeatures = features.toMutableList()
+            currentFeatures = features.map {
+                if (it.id() == null) Feature.fromGeometry(it.geometry(), it.properties(), java.util.UUID.randomUUID().toString())
+                else it
+            }.toMutableList()
             refreshManualLayers()
             updateWmsLayerUI()
             updateStatus("Imported $sourceName: ${features.size} items")
@@ -1499,11 +1505,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         try {
             val feature = Feature.fromGeometry(Point.fromLngLat(loc.longitude, loc.latitude))
             val collection = FeatureCollection.fromFeatures(listOf(feature))
+            val json = collection.toJson()
             val source = style.getSource("gnss-source") as? GeoJsonSource
             if (source != null) {
-                source.setGeoJson(collection)
+                source.setGeoJson(json)
             } else {
-                style.addSource(GeoJsonSource("gnss-source", collection))
+                style.addSource(GeoJsonSource("gnss-source", json))
             }
 
             if (style.getLayer("gnss-layer") == null) {
@@ -1537,7 +1544,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             try {
                 // 1. Update SAVED features (Magenta)
                 val savedFeatures = FeatureCollection.fromFeatures(currentFeatures)
-                Log.d(TAG, "refreshManualLayers: Updating manual-saved-source with ${currentFeatures.size} features")
+                val savedJson = savedFeatures.toJson()
+                Log.d(TAG, "refreshManualLayers: Updating manual-saved-source with ${currentFeatures.size} features, JSON len: ${savedJson.length}")
                 updateGeoJsonSource(style, "manual-saved-source", savedFeatures)
 
                 ensureManualLayer(style, "manual-saved-fill", "manual-saved-source", FillLayer::class.java) { layer ->
@@ -1576,8 +1584,10 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         }
                     }
                 }
-                updateGeoJsonSource(style, "manual-draw-source", FeatureCollection.fromFeatures(drawFeaturesList))
-                Log.d(TAG, "refreshManualLayers: Updating manual-draw-source with ${drawFeaturesList.size} features")
+                val drawFeatures = FeatureCollection.fromFeatures(drawFeaturesList)
+                val drawJson = drawFeatures.toJson()
+                Log.d(TAG, "refreshManualLayers: Updating manual-draw-source with ${drawFeaturesList.size} features, JSON len: ${drawJson.length}")
+                updateGeoJsonSource(style, "manual-draw-source", drawFeatures)
 
                 ensureManualLayer(style, "manual-draw-fill", "manual-draw-source", FillLayer::class.java) { layer ->
                     layer.setProperties(PropertyFactory.fillColor(Color.RED), PropertyFactory.fillOpacity(0.5f))
@@ -1606,19 +1616,18 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 if (drawPoints.isNotEmpty()) updateStatus("Drawing: ${drawPoints.size} pts")
             } catch (e: Exception) {
                 Log.e(TAG, "Error in refreshManualLayers: ${e.message}")
-            } finally {
-                ensureLayerOrder()
             }
         }
     }
 
     private fun updateGeoJsonSource(style: Style, id: String, collection: FeatureCollection) {
         val source = style.getSource(id) as? GeoJsonSource
+        val json = collection.toJson()
         if (source != null) {
-            source.setGeoJson(collection)
+            source.setGeoJson(json)
         } else {
             val options = org.maplibre.android.style.sources.GeoJsonOptions().withMaxZoom(28).withBuffer(512).withTolerance(0f)
-            style.addSource(GeoJsonSource(id, collection, options))
+            style.addSource(GeoJsonSource(id, json, options))
         }
     }
 
@@ -1814,7 +1823,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             drawingMode = mode
         }
         updateDrawingButtons()
-        if (drawingMode != 0) {
+        if (drawingMode == 0) {
+            // Cleanup on drawing mode OFF
+        } else {
             isMeasureMode = false
             measureButton.text = getString(R.string.meas)
             measurePoints.clear()
@@ -1867,7 +1878,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             .setTitle(R.string.add_pt_gnss)
             .setView(layout)
             .setPositiveButton(R.string.save) { _, _ ->
-                val f = Feature.fromGeometry(Point.fromLngLat(loc.longitude, loc.latitude))
+                val f = Feature.fromGeometry(Point.fromLngLat(loc.longitude, loc.latitude), null, java.util.UUID.randomUUID().toString())
                 f.addStringProperty("name", nameInput.text.toString())
                 f.addStringProperty("notes", notesInput.text.toString())
                 currentFeatures.add(f)
@@ -1895,7 +1906,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     .setTitle(R.string.draw_pt)
                     .setView(layout)
                     .setPositiveButton(R.string.save) { _, _ ->
-                        val f = Feature.fromGeometry(Point.fromLngLat(latLng.longitude, latLng.latitude))
+                        val f = Feature.fromGeometry(Point.fromLngLat(latLng.longitude, latLng.latitude), null, java.util.UUID.randomUUID().toString())
                         f.addStringProperty("name", nameInput.text.toString())
                         f.addStringProperty("notes", notesInput.text.toString())
                         currentFeatures.add(f)
@@ -1933,7 +1944,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 .setTitle(R.string.draw_line)
                 .setView(layout)
                 .setPositiveButton(R.string.save) { _, _ ->
-                    val f = Feature.fromGeometry(LineString.fromLngLats(drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) }))
+                    val f = Feature.fromGeometry(LineString.fromLngLats(drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) }), null, java.util.UUID.randomUUID().toString())
                     f.addStringProperty("name", nameInput.text.toString())
                     f.addStringProperty("notes", notesInput.text.toString())
                     currentFeatures.add(f)
@@ -1972,7 +1983,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 .setPositiveButton(R.string.save) { _, _ ->
                     val pts = drawPoints.map { Point.fromLngLat(it.longitude, it.latitude) }.toMutableList()
                     pts.add(pts[0]) // Close
-                    val f = Feature.fromGeometry(Polygon.fromLngLats(listOf(pts)))
+                    val f = Feature.fromGeometry(Polygon.fromLngLats(listOf(pts)), null, java.util.UUID.randomUUID().toString())
                     f.addStringProperty("name", nameInput.text.toString())
                     f.addStringProperty("notes", notesInput.text.toString())
                     currentFeatures.add(f)
@@ -2191,22 +2202,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         when (geom) {
             is Point -> {
                 currentFeatures.remove(f)
-                val newF = Feature.fromGeometry(projectPoint(geom))
-                f.properties()?.entrySet()?.forEach { newF.addProperty(it.key, it.value) }
+                val newF = Feature.fromGeometry(projectPoint(geom), f.properties(), f.id())
                 currentFeatures.add(newF)
             }
             is LineString -> {
                 val newCoords = geom.coordinates().map { projectPoint(it) }
                 currentFeatures.remove(f)
-                val newF = Feature.fromGeometry(LineString.fromLngLats(newCoords))
-                f.properties()?.entrySet()?.forEach { newF.addProperty(it.key, it.value) }
+                val newF = Feature.fromGeometry(LineString.fromLngLats(newCoords), f.properties(), f.id())
                 currentFeatures.add(newF)
             }
             is Polygon -> {
                 val newRings = geom.coordinates().map { ring -> ring.map { projectPoint(it) } }
                 currentFeatures.remove(f)
-                val newF = Feature.fromGeometry(Polygon.fromLngLats(newRings))
-                f.properties()?.entrySet()?.forEach { newF.addProperty(it.key, it.value) }
+                val newF = Feature.fromGeometry(Polygon.fromLngLats(newRings), f.properties(), f.id())
                 currentFeatures.add(newF)
             }
         }
@@ -2222,8 +2230,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         when (geom) {
             is Point -> {
                 currentFeatures.remove(f)
-                val newF = Feature.fromGeometry(newPoint)
-                f.properties()?.entrySet()?.forEach { newF.addProperty(it.key, it.value) }
+                val newF = Feature.fromGeometry(newPoint, f.properties(), f.id())
                 currentFeatures.add(newF)
             }
             is LineString -> {
@@ -2231,8 +2238,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                 if (movingVertexIndex != -1) {
                     coords[movingVertexIndex] = newPoint
                     currentFeatures.remove(f)
-                    val newF = Feature.fromGeometry(LineString.fromLngLats(coords))
-                    f.properties()?.entrySet()?.forEach { newF.addProperty(it.key, it.value) }
+                    val newF = Feature.fromGeometry(LineString.fromLngLats(coords), f.properties(), f.id())
                     currentFeatures.add(newF)
                 }
             }
@@ -2247,8 +2253,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
                     rings[0] = outer
                     currentFeatures.remove(f)
-                    val newF = Feature.fromGeometry(Polygon.fromLngLats(rings))
-                    f.properties()?.entrySet()?.forEach { newF.addProperty(it.key, it.value) }
+                    val newF = Feature.fromGeometry(Polygon.fromLngLats(rings), f.properties(), f.id())
                     currentFeatures.add(newF)
                 }
             }
@@ -2399,12 +2404,13 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             } else null
 
             val collection = FeatureCollection.fromFeatures(if (lineFeature != null) features + lineFeature else features)
+            val json = collection.toJson()
             val source = style.getSource("measure-source") as? GeoJsonSource
             if (source != null) {
-                source.setGeoJson(collection)
+                source.setGeoJson(json)
             } else {
                 val options = org.maplibre.android.style.sources.GeoJsonOptions().withBuffer(512).withTolerance(0f).withMaxZoom(28)
-                style.addSource(GeoJsonSource("measure-source", collection, options))
+                style.addSource(GeoJsonSource("measure-source", json, options))
             }
 
             if (style.getLayer("measure-points") == null) {
