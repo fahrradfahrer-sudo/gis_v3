@@ -1655,7 +1655,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val layer = style.getLayer(id)
             if (layer != null) {
                 style.removeLayer(id)
-                style.addLayerAt(layer, style.layers.size)
+                style.addLayer(layer)
             }
         }
     }
