@@ -1655,7 +1655,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val layer = style.getLayer(id)
             if (layer != null) {
                 style.removeLayer(id)
-                style.addLayer(layer)
+                if (style.getLayer(id) == null) {
+                    style.addLayer(layer)
+                }
             }
         }
     }
@@ -2452,9 +2454,9 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             // Bring measure points to very top
-            style.getLayer("measure-line")?.let { l -> style.removeLayer(l); style.addLayer(l) }
-            style.getLayer("measure-circles")?.let { l -> style.removeLayer(l); style.addLayer(l) }
-            style.getLayer("measure-points")?.let { l -> style.removeLayer(l); style.addLayer(l) }
+            style.getLayer("measure-line")?.let { l -> style.removeLayer(l); if (style.getLayer(l.id) == null) style.addLayer(l) }
+            style.getLayer("measure-circles")?.let { l -> style.removeLayer(l); if (style.getLayer(l.id) == null) style.addLayer(l) }
+            style.getLayer("measure-points")?.let { l -> style.removeLayer(l); if (style.getLayer(l.id) == null) style.addLayer(l) }
 
         } catch (e: Exception) {
             Log.e(TAG, "Error in addMeasurePoint: ${e.message}")
