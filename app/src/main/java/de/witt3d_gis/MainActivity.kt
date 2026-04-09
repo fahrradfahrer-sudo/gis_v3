@@ -338,8 +338,15 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             }
 
             findViewById<ScaleBarView>(R.id.scaleBar).setMap(mapObj)
-            // DIAGNOSTIC DEFAULT: No Base Map
-            loadStyle(mapStyles[5].second)
+            // DEFAULT: Google Hybrid
+            loadStyle(mapStyles[0].second)
+
+            mapObj.addOnCameraMoveListener {
+                val center = mapObj.cameraPosition.target
+                if (center != null) {
+                    coordsText.text = "%.7f, %.7f".format(center.latitude, center.longitude)
+                }
+            }
         }
 
         connectSerialButton.setOnClickListener {
@@ -511,7 +518,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             style.addImage("gnss-crosshair", drawableToBitmap(ContextCompat.getDrawable(this, R.drawable.ic_crosshair)!!))
 
             refreshWmsLayers()
-            refreshManualLayers()
             enableLocationComponent(style)
 
             if (isMeasureMode) {
@@ -576,7 +582,6 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         }
 
         refreshManualLayers()
-        ensureLayerOrder()
     }
 
     private fun updateStatus(msg: String) {
@@ -962,7 +967,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         setPadding(0,0,0,0)
                         layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
                         setOnClickListener {
-                            currentFeatures.remove(feature)
+                            val id = feature.id()
+                            if (id != null) {
+                                currentFeatures.removeAll { it.id() == id }
+                            } else {
+                                currentFeatures.remove(feature)
+                            }
                             refreshManualLayers()
                             updateWmsLayerUI()
                         }
@@ -1541,47 +1551,52 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
 
         runOnUiThread {
             try {
-                val manualSavedIds = listOf("manual-saved-fill", "manual-saved-line", "manual-saved-circle", "manual-saved-label")
-                val manualDrawIds = listOf("manual-draw-fill", "manual-draw-line", "manual-draw-circle")
-
-                // Completely remove layers and sources to ensure a fresh state
-                manualSavedIds.forEach { id -> style.getLayer(id)?.let { style.removeLayer(it) } }
-                style.getSource("manual-saved-source")?.let { style.removeSource(it) }
-                manualDrawIds.forEach { id -> style.getLayer(id)?.let { style.removeLayer(it) } }
-                style.getSource("manual-draw-source")?.let { style.removeSource(it) }
-
-                // 1. Update SAVED features (Magenta)
+                // 1. SAVED features
                 val savedFeatures = FeatureCollection.fromFeatures(currentFeatures.toList())
                 val savedJson = savedFeatures.toJson()
                 Log.d(TAG, "refreshManualLayers: Saved features=${currentFeatures.size} jsonLen=${savedJson.length}")
 
-                val savedOptions = org.maplibre.android.style.sources.GeoJsonOptions().withMaxZoom(28).withBuffer(512).withTolerance(0f)
-                style.addSource(GeoJsonSource("manual-saved-source", savedJson, savedOptions))
+                val savedSource = style.getSource("manual-saved-source") as? GeoJsonSource
+                if (savedSource != null) {
+                    savedSource.setGeoJson(savedJson)
+                } else {
+                    val opt = org.maplibre.android.style.sources.GeoJsonOptions().withMaxZoom(28).withBuffer(512).withTolerance(0f)
+                    style.addSource(GeoJsonSource("manual-saved-source", savedJson, opt))
+                }
 
-                style.addLayer(FillLayer("manual-saved-fill", "manual-saved-source").apply {
-                    setProperties(PropertyFactory.fillColor("#FF00FF"), PropertyFactory.fillOpacity(0.5f))
-                })
-                style.addLayer(LineLayer("manual-saved-line", "manual-saved-source").apply {
-                    setProperties(PropertyFactory.lineColor("#FF00FF"), PropertyFactory.lineWidth(8f))
-                })
-                style.addLayer(CircleLayer("manual-saved-circle", "manual-saved-source").apply {
-                    setProperties(PropertyFactory.circleRadius(10f), PropertyFactory.circleColor("#FF00FF"), PropertyFactory.circleStrokeWidth(3f), PropertyFactory.circleStrokeColor("#FFFFFF"))
-                })
-                style.addLayer(SymbolLayer("manual-saved-label", "manual-saved-source").apply {
-                    setProperties(
-                        PropertyFactory.textField(org.maplibre.android.style.expressions.Expression.get("name")),
-                        PropertyFactory.textSize(14f),
-                        PropertyFactory.textColor("#000000"),
-                        PropertyFactory.textHaloColor("#FFFFFF"),
-                        PropertyFactory.textHaloWidth(2f),
-                        PropertyFactory.textAnchor(org.maplibre.android.style.layers.Property.TEXT_ANCHOR_TOP),
-                        PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
-                        PropertyFactory.textAllowOverlap(true),
-                        PropertyFactory.textIgnorePlacement(true)
-                    )
-                })
+                if (style.getLayer("manual-saved-fill") == null) {
+                    style.addLayer(FillLayer("manual-saved-fill", "manual-saved-source").apply {
+                        setProperties(PropertyFactory.fillColor("#FF00FF"), PropertyFactory.fillOpacity(0.5f))
+                        setFilter(org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), "Polygon"))
+                    })
+                }
+                if (style.getLayer("manual-saved-line") == null) {
+                    style.addLayer(LineLayer("manual-saved-line", "manual-saved-source").apply {
+                        setProperties(PropertyFactory.lineColor("#FF00FF"), PropertyFactory.lineWidth(8f))
+                        setFilter(org.maplibre.android.style.expressions.Expression.any(
+                            org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), "LineString"),
+                            org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), "Polygon")
+                        ))
+                    })
+                }
+                if (style.getLayer("manual-saved-circle") == null) {
+                    style.addLayer(CircleLayer("manual-saved-circle", "manual-saved-source").apply {
+                        setProperties(PropertyFactory.circleRadius(10f), PropertyFactory.circleColor("#FF00FF"), PropertyFactory.circleStrokeWidth(3f), PropertyFactory.circleStrokeColor("#FFFFFF"))
+                        setFilter(org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), "Point"))
+                    })
+                }
+                if (style.getLayer("manual-saved-label") == null) {
+                    style.addLayer(SymbolLayer("manual-saved-label", "manual-saved-source").apply {
+                        setProperties(
+                            PropertyFactory.textField(org.maplibre.android.style.expressions.Expression.get("name")),
+                            PropertyFactory.textSize(14f), PropertyFactory.textColor("#000000"), PropertyFactory.textHaloColor("#FFFFFF"), PropertyFactory.textHaloWidth(2f),
+                            PropertyFactory.textAnchor(org.maplibre.android.style.layers.Property.TEXT_ANCHOR_TOP), PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
+                            PropertyFactory.textAllowOverlap(true), PropertyFactory.textIgnorePlacement(true)
+                        )
+                    })
+                }
 
-                // 2. Update ACTIVE DRAWING features (Red)
+                // 2. ACTIVE DRAWING features
                 val drawFeaturesList = mutableListOf<Feature>()
                 if (drawPoints.isNotEmpty()) {
                     drawPoints.forEach { drawFeaturesList.add(Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude), null, "draw-${it.hashCode()}")) }
@@ -1594,30 +1609,44 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                         }
                     }
                 }
-                val drawFeatures = FeatureCollection.fromFeatures(drawFeaturesList)
-                val drawJson = drawFeatures.toJson()
-                Log.d(TAG, "refreshManualLayers: Drawing features=${drawFeaturesList.size} jsonLen=${drawJson.length}")
+                val drawJson = FeatureCollection.fromFeatures(drawFeaturesList).toJson()
+                val drawSource = style.getSource("manual-draw-source") as? GeoJsonSource
+                if (drawSource != null) {
+                    drawSource.setGeoJson(drawJson)
+                } else {
+                    val opt = org.maplibre.android.style.sources.GeoJsonOptions().withMaxZoom(28).withBuffer(512).withTolerance(0f)
+                    style.addSource(GeoJsonSource("manual-draw-source", drawJson, opt))
+                }
 
-                val drawOptions = org.maplibre.android.style.sources.GeoJsonOptions().withMaxZoom(28).withBuffer(512).withTolerance(0f)
-                style.addSource(GeoJsonSource("manual-draw-source", drawJson, drawOptions))
+                if (style.getLayer("manual-draw-fill") == null) {
+                    style.addLayer(FillLayer("manual-draw-fill", "manual-draw-source").apply {
+                        setProperties(PropertyFactory.fillColor("#FF0000"), PropertyFactory.fillOpacity(0.5f))
+                        setFilter(org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), "Polygon"))
+                    })
+                }
+                if (style.getLayer("manual-draw-line") == null) {
+                    style.addLayer(LineLayer("manual-draw-line", "manual-draw-source").apply {
+                        setProperties(PropertyFactory.lineColor("#FF0000"), PropertyFactory.lineWidth(8f))
+                        setFilter(org.maplibre.android.style.expressions.Expression.any(
+                            org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), "LineString"),
+                            org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), "Polygon")
+                        ))
+                    })
+                }
+                if (style.getLayer("manual-draw-circle") == null) {
+                    style.addLayer(CircleLayer("manual-draw-circle", "manual-draw-source").apply {
+                        setProperties(PropertyFactory.circleRadius(10f), PropertyFactory.circleColor("#FF0000"), PropertyFactory.circleStrokeWidth(3f), PropertyFactory.circleStrokeColor("#FFFFFF"))
+                        setFilter(org.maplibre.android.style.expressions.Expression.eq(org.maplibre.android.style.expressions.Expression.geometryType(), "Point"))
+                    })
+                }
 
-                style.addLayer(FillLayer("manual-draw-fill", "manual-draw-source").apply {
-                    setProperties(PropertyFactory.fillColor("#FF0000"), PropertyFactory.fillOpacity(0.5f))
-                })
-                style.addLayer(LineLayer("manual-draw-line", "manual-draw-source").apply {
-                    setProperties(PropertyFactory.lineColor("#FF0000"), PropertyFactory.lineWidth(8f))
-                })
-                style.addLayer(CircleLayer("manual-draw-circle", "manual-draw-source").apply {
-                    setProperties(PropertyFactory.circleRadius(10f), PropertyFactory.circleColor("#FF0000"), PropertyFactory.circleStrokeWidth(3f), PropertyFactory.circleStrokeColor("#FFFFFF"))
-                })
-
-                // Handle global visibility toggle from drawer
+                // Global visibility toggle
                 val config = wmsLayers.find { it.id == "internal_manual" }
                 val manualVisible = config?.enabled ?: true
-                val visibility = if (manualVisible) org.maplibre.android.style.layers.Property.VISIBLE else org.maplibre.android.style.layers.Property.NONE
+                val savedVis = if (manualVisible) org.maplibre.android.style.layers.Property.VISIBLE else org.maplibre.android.style.layers.Property.NONE
 
-                manualSavedIds.forEach { style.getLayer(it)?.setProperties(PropertyFactory.visibility(visibility)) }
-                manualDrawIds.forEach { style.getLayer(it)?.setProperties(PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)) }
+                listOf("manual-saved-fill", "manual-saved-line", "manual-saved-circle", "manual-saved-label").forEach { style.getLayer(it)?.setProperties(PropertyFactory.visibility(savedVis)) }
+                listOf("manual-draw-fill", "manual-draw-line", "manual-draw-circle").forEach { style.getLayer(it)?.setProperties(PropertyFactory.visibility(org.maplibre.android.style.layers.Property.VISIBLE)) }
 
                 if (drawPoints.isNotEmpty()) updateStatus("Drawing: ${drawPoints.size} pts")
             } catch (e: Exception) {
@@ -1673,7 +1702,7 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val layer = style.getLayer(id)
             if (layer != null) {
                 style.removeLayer(layer)
-                style.addLayer(layer)
+                style.addLayerAt(layer, style.layers.size)
             }
         }
     }
@@ -2130,7 +2159,12 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             val deleteBtn = Button(this).apply {
                 text = getString(R.string.delete)
                 setOnClickListener {
-                    currentFeatures.remove(f)
+                    val id = f.id()
+                    if (id != null) {
+                        currentFeatures.removeAll { it.id() == id }
+                    } else {
+                        currentFeatures.remove(f)
+                    }
                     refreshManualLayers()
                     updateWmsLayerUI()
                     alertDialog.dismiss()
@@ -2208,22 +2242,26 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
             return Point.fromLngLat(Math.toDegrees(lon2), Math.toDegrees(lat2))
         }
 
+        val fid = f.id()
+        if (fid != null) {
+            currentFeatures.removeAll { it.id() == fid }
+        } else {
+            currentFeatures.remove(f)
+        }
+
         when (geom) {
             is Point -> {
-                currentFeatures.remove(f)
-                val newF = Feature.fromGeometry(projectPoint(geom), f.properties(), f.id())
+                val newF = Feature.fromGeometry(projectPoint(geom), f.properties(), fid)
                 currentFeatures.add(newF)
             }
             is LineString -> {
                 val newCoords = geom.coordinates().map { projectPoint(it) }
-                currentFeatures.remove(f)
-                val newF = Feature.fromGeometry(LineString.fromLngLats(newCoords), f.properties(), f.id())
+                val newF = Feature.fromGeometry(LineString.fromLngLats(newCoords), f.properties(), fid)
                 currentFeatures.add(newF)
             }
             is Polygon -> {
                 val newRings = geom.coordinates().map { ring -> ring.map { projectPoint(it) } }
-                currentFeatures.remove(f)
-                val newF = Feature.fromGeometry(Polygon.fromLngLats(newRings), f.properties(), f.id())
+                val newF = Feature.fromGeometry(Polygon.fromLngLats(newRings), f.properties(), fid)
                 currentFeatures.add(newF)
             }
         }
@@ -2236,18 +2274,19 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
         val geom = f.geometry()
         val newPoint = Point.fromLngLat(newLatLng.longitude, newLatLng.latitude)
 
+        val fid = f.id()
         when (geom) {
             is Point -> {
-                currentFeatures.remove(f)
-                val newF = Feature.fromGeometry(newPoint, f.properties(), f.id())
+                if (fid != null) currentFeatures.removeAll { it.id() == fid } else currentFeatures.remove(f)
+                val newF = Feature.fromGeometry(newPoint, f.properties(), fid)
                 currentFeatures.add(newF)
             }
             is LineString -> {
                 val coords = geom.coordinates().toMutableList()
                 if (movingVertexIndex != -1) {
                     coords[movingVertexIndex] = newPoint
-                    currentFeatures.remove(f)
-                    val newF = Feature.fromGeometry(LineString.fromLngLats(coords), f.properties(), f.id())
+                    if (fid != null) currentFeatures.removeAll { it.id() == fid } else currentFeatures.remove(f)
+                    val newF = Feature.fromGeometry(LineString.fromLngLats(coords), f.properties(), fid)
                     currentFeatures.add(newF)
                 }
             }
@@ -2261,8 +2300,8 @@ class MainActivity : AppCompatActivity(), SerialLocationManager.LocationListener
                     if (movingVertexIndex == outer.size - 1) outer[0] = newPoint
 
                     rings[0] = outer
-                    currentFeatures.remove(f)
-                    val newF = Feature.fromGeometry(Polygon.fromLngLats(rings), f.properties(), f.id())
+                    if (fid != null) currentFeatures.removeAll { it.id() == fid } else currentFeatures.remove(f)
+                    val newF = Feature.fromGeometry(Polygon.fromLngLats(rings), f.properties(), fid)
                     currentFeatures.add(newF)
                 }
             }
